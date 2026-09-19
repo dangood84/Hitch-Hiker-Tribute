@@ -437,7 +437,8 @@ begin
   Mask := GDK_BUTTON_PRESS_MASK or GDK_BUTTON_RELEASE_MASK or
     GDK_POINTER_MOTION_MASK or GDK_LEAVE_NOTIFY_MASK or GDK_STRUCTURE_MASK;
   gtk_widget_add_events(DrawArea, Mask);
-  gtk_widget_set_can_focus(DrawArea, True);
+  { gtk_widget_set_can_focus is GTK 2.18+; older FPC gtk2 units only have flags. }
+  GTK_WIDGET_SET_FLAGS(DrawArea, GTK_CAN_FOCUS);
   g_signal_connect(G_OBJECT(DrawArea), 'configure-event', TGCallback(@OnConfigure), nil);
   g_signal_connect(G_OBJECT(DrawArea), 'expose-event', TGCallback(@OnExpose), nil);
   g_signal_connect(G_OBJECT(DrawArea), 'button-press-event', TGCallback(@OnButtonPress), nil);
