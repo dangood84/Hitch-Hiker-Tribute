@@ -59,10 +59,11 @@ Linux: `gtk_init`, `gtk_window_new`, drawing area, `gtk_main`.
 
 **6.** `controller := TGuideController.Create(pixelW, pixelH)`:
 
-- `TGuideModel.Create` — Earth selected, `gpIdle`, body fully visible, scanline 0
+- `TGuideModel.Create` — Earth selected, `gpIdle`, body fully visible, scanline 0, sfx queue empty
 - `Canvas` `TPixelBuffer` allocated (RGBA)
 - `HoverIndex` / `PressedIndex` = `-1`
 - `NeedsPresent` = True so the first frame is not blank
+- Host also builds the three in-memory WAVs (`sfxSearch`, `sfxFound`, `sfxType`) once; nothing is read from disk
 
 **7.** Application menu targets the delegate: `aboutAction:`, `quitAction:` with **⌘Q**. View menu: Full Screen with **Ctrl+Cmd+F**.
 
@@ -91,6 +92,7 @@ Linux: `g_timeout_add(50, ...)`.
 
 ```pascal
 controller.Tick;          { Model.Tick: scanline 0→1→2→3→0, flicker 0..7 }
+drainAudio;               { DrainSfx → NSSound; idle queue is empty }
 if controller.NeedsPresent then
   redraw;
 ```
@@ -104,7 +106,7 @@ On idle, `Tick` does **not** change the entry. It always sets `NeedsPresent`, be
 3. Dim series title, glowing yellow `*** DON'T PANIC ***`
 4. Index column; Earth marked `>1 EARTH`
 5. Content: `> EARTH`, subtitle, wrapped body, planet doodle
-6. Footer `Entry 1 of 9 | ...`
+6. Footer `Entry 1/9  LEFT/RIGHT  1-9  F11  ESC`
 7. Darken every fourth scanline, offset by `ScanlineOffset`
 
 **14.** `MakeImage` copies the RGBA bytes into a fresh `NSBitmapImageRep` (AppKit owns that snapshot; aliasing `Canvas.Ptr` would freeze the tube). `setNeedsDisplay_` makes AppKit call `drawRect`, which draws the `NSImage` into the unflipped view.
@@ -125,9 +127,12 @@ Index 0 → 1
 Phase  idle → searching     { State change: fetch Babel Fish }
 VisibleChars := 0
 PhaseTick := 0
+PushSfx(sfxSearch)          { stuttering computer chirp }
 ```
 
-**17.** The next paints show the index caret on `>2 BABEL FISH` and, in the content well, concentric frames plus `RESEARCHING...`. The body is empty (`VisibleBody = ''`). `BeginSearch` also queued `sfxSearch`; `drainAudio` plays the chirp (`NSSound` on macOS).
+Then `drainAudio` (from `keyDown`) plays that chirp. The timer will drain any later found/type cues.
+
+**17.** The next paints show the index caret on `>2 BABEL FISH` and, in the content well, concentric frames plus `RESEARCHING...`. The body is empty (`VisibleBody = ''`).
 
 **18.** For ~18 ticks (about 0.9 s) `PhaseTick` climbs. On the tick where it reaches `SearchTicks`:
 
@@ -147,8 +152,8 @@ Phase  typing → idle        { State change: the page sits on the phosphor }
 
 Babel Fish is now fully typed. Scanlines keep crawling.
 
-Windows: `WM_KEYDOWN` with `VK_RIGHT` is the same `gkNext`.
-Linux: `GDK_Right` likewise.
+Windows: `WM_KEYDOWN` with `VK_RIGHT` is the same `gkNext`, then `PlaySound`.
+Linux: `GDK_Right` likewise, then `paplay` / `aplay`.
 
 Clicking index row 2 is the same model call (`SelectIndex(1)`), after the classic press/release rule: mouse-up must land on the same row mouse-down started on.
 
@@ -168,6 +173,6 @@ Clicking index row 2 is the same model call (`SelectIndex(1)`), after the classi
 
 ## Headless paths
 
-`make test` compiles `guidetest.pas` against `uguidemodel` and `uguideaudio`. No host, no canvas. It checks wrap, jump, the three phases, the sfx queue, freeze, and that Earth still says harmless.
+`make test` compiles `guidetest.pas` against `uguidemodel` and `uguideaudio`. No host, no canvas, no speaker. It checks wrap, jump, the three phases, WAV headers, the search/found/type sfx queue, freeze, and that Earth still says harmless.
 
-`make snap` constructs a `TGuideController` at 1520×1080, writes four PPM files, and exits. Useful when you want to see the CRT without opening a window.
+`make snap` constructs a `TGuideController` at 1520×1080, writes four PPM files, and exits. `ShowImmediate` clears the sfx queue, so snapshots never leave a chirp pending. Useful when you want to see the CRT without opening a window.

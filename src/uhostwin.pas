@@ -4,7 +4,8 @@ unit uhostwin;
 
 { Windows titled, resizable window on the taskbar. Same TGuideController
   as macOS; this unit presents pixels (BGRA StretchDIBits), a 50 ms
-  timer, keys / clicks, and F11 / double-click fullscreen. }
+  timer, original WAV stings via PlaySound, keys / clicks, and F11 /
+  double-click fullscreen. }
 
 interface
 

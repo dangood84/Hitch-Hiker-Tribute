@@ -12,8 +12,9 @@ unit uguidemodel;
   Tick() advances scanlines always, and the phase timers when a page
   turn is in flight. Hosts never mutate FIndex themselves.
 
-  Audio is queued here (search chirp, page-found beep) so the renderer
-  never starts a sound. Hosts DrainSfx and play the in-memory WAVs. }
+  Audio is queued here (search chirp, page-found beep, per-letter pip)
+  so the renderer never starts a sound. Hosts DrainSfx and play the
+  in-memory WAVs. }
 
 interface
 

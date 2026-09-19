@@ -2,8 +2,8 @@ program guidesnap;
 
 {$mode objfpc}{$H+}
 
-{ Writes PPM frames of the software canvas (no window).
-  Usage: guidesnap out-dir }
+{ Writes PPM frames of the software canvas (no window, no speaker).
+  ShowImmediate clears the sfx queue. Usage: guidesnap out-dir }
 
 uses
   SysUtils, uguidemodel, uguideapp;

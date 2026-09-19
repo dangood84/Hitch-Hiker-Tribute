@@ -3,9 +3,9 @@ unit uhostgtk;
 {$mode objfpc}{$H+}
 
 { Linux GTK 2 window. Same TGuideController as macOS; this unit presents
-  a GdkPixbuf on a drawing area, a 50 ms timeout, keys / clicks, and F11
-  fullscreen. GTK 2 is the Raspberry Pi OS-friendly toolkit the other
-  Pascal apps use. }
+  a GdkPixbuf on a drawing area, a 50 ms timeout, original WAV stings via
+  paplay/aplay, keys / clicks, and F11 fullscreen. GTK 2 is the Raspberry
+  Pi OS-friendly toolkit the other Pascal apps use. }
 
 interface
 

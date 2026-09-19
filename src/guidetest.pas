@@ -2,7 +2,8 @@ program guidetest;
 
 {$mode objfpc}{$H+}
 
-{ Headless checks for uguidemodel. No GUI. Run with: make test }
+{ Headless checks for uguidemodel and uguideaudio. No GUI, no speaker.
+  Run with: make test }
 
 uses
   SysUtils, uguidemodel, uguideaudio;

@@ -2,7 +2,7 @@
 
 A tribute to the **1981 BBC television series**: phosphor-green CRT text on a deep black tube, a large friendly **DON'T PANIC**, rolling scanlines, and a pocket encyclopedia you can page through.
 
-Written in **Free Pascal**. Lazarus and Delphi are not required — `fpc` plus the platform GUI libraries already on the machine are enough. There is no SDL2, no JVM, and no widget-toolkit theme to fight. The whole tube is a software RGBA canvas; each host only uploads those bytes into a native window.
+Written in **Free Pascal**. Lazarus and Delphi are not required — `fpc` plus the platform GUI libraries already on the machine are enough. There is no SDL2, no JVM, and no widget-toolkit theme to fight. The whole tube is a software RGBA canvas; each host only uploads those bytes into a native window and plays the original chip stings.
 
 Pascal is a better fit here than Java for the same reason it was for the calculator and the RISC OS clock: one compile-time host (`{$IFDEF}`) gives a small native binary on macOS, Windows, and Linux, with mouse and key events coming from Cocoa / Win32 / GTK.
 
@@ -12,7 +12,7 @@ The Guide:
 - **researches** the next page with a pulsing vector frame, then **types** the body onto the phosphor
 - keeps a clickable **index** down the left
 - crawls **CRT scanlines** and a tiny green flicker even while idle
-- plays original **8-bit chirps** on a page turn (search, then a two-note "found")
+- plays original **8-bit stings** on a page turn (search chirp, found beep, then a pip per letter)
 - stays a **4:3-ish terminal** when you stretch the window or go fullscreen
 
 How the pieces fit together (same style as the calculator, the RISC OS clock, Eyes, the Grouch, and Moiré): `WORKINGS.md` for responsibilities and the page-turn state machine, `EXECUTION_FLOW.md` for a tick-by-tick trace.
@@ -35,7 +35,9 @@ Debian / Raspberry Pi OS:
 sudo apt install fpc libgtk2.0-dev
 ```
 
-Windows 10+: a native Free Pascal install (the `Windows` unit ships with FPC).
+Optional, so the stings play: `pulseaudio-utils` (`paplay`) or `alsa-utils` (`aplay`).
+
+Windows 10+: a native Free Pascal install (the `Windows` / `MMSystem` units ship with FPC).
 
 ## Run
 
@@ -53,7 +55,7 @@ Or with Make on other OSes:
 ```bash
 make linux      # Linux / Raspberry Pi OS window
 make windows    # HitchHikersGuide.exe
-make test       # headless encyclopedia / state-machine checks (no GUI)
+make test       # headless encyclopedia / phase / sfx-queue checks (no GUI)
 make snap       # PPM frames of the canvas (Earth, researching, 42, wide)
 make clean      # remove build/
 ```
@@ -74,6 +76,18 @@ open build/HitchHikersGuide.app
 4. While it researches, concentric frames pulse, `RESEARCHING...` ticks, and a computer chirp plays. Then a two-note beep, then **one pip per letter** as the body types on.
 5. **F11** (or **View → Full Screen**, or **double-click** the tube) goes fullscreen. **Esc** leaves it. On macOS the green traffic-light button and **Ctrl+Cmd+F** do the same native fullscreen. **Esc** in a windowed tube **quits**.
 6. **Guide → About** describes the tribute. Closing the window quits.
+
+## Sound
+
+All three cues are **original square-wave WAVs** built in memory at launch (`uguideaudio`). Nothing is loaded from disk, and none of it is the BBC TV soundtrack.
+
+| When | Cue |
+|------|-----|
+| Page turn starts (`RESEARCHING`) | Stuttering search chirp (`sfxSearch`) |
+| The page is found, just before letters appear | Two-note “page ready” beep (`sfxFound`) |
+| Each letter types onto the phosphor | Short F6 pip (`sfxType`) |
+
+macOS plays them with `NSSound`. Windows uses `PlaySound` (winmm). Linux tries `paplay`, then `aplay`. The tube still runs if those players are missing; it is just quiet.
 
 ## Keyboard
 
@@ -103,12 +117,12 @@ src/
   uguidemodel.pas    # entries, page-turn phases, scanline offset, sfx queue
   uguiderender.pas   # software RGBA canvas (CRT frame, glyphs, art)
   uguideapp.pas      # TGuideController: hit-test, tick, present flag
-  uguideaudio.pas    # original WAV search chirp + found beep
+  uguideaudio.pas    # original WAV search chirp, found beep, letter pip
   ubitmapfont.pas    # 8×8 glyphs (no native text APIs)
-  uhostcocoa.pas     # macOS NSWindow
-  uhostwin.pas       # Windows HWND
-  uhostgtk.pas       # Linux GtkWindow
-  guidetest.pas      # headless encyclopedia / state checks
+  uhostcocoa.pas     # macOS NSWindow + NSSound
+  uhostwin.pas       # Windows HWND + PlaySound
+  uhostgtk.pas       # Linux GtkWindow + paplay/aplay
+  guidetest.pas      # headless encyclopedia / phase / sfx checks
   guidesnap.pas      # paints PPM frames without a window
 bundle/
   Info.plist         # retina-capable app bundle

@@ -3,7 +3,8 @@ unit uguideapp;
 {$mode objfpc}{$H+}
 
 { One model, one canvas. Hosts convert OS mouse/keyboard into these calls,
-  fire Tick on a ~50 ms timer, and present Canvas when NeedsPresent is set.
+  fire Tick on a ~50 ms timer, drain Model.DrainSfx, and present Canvas
+  when NeedsPresent is set.
 
   FullScreen is *reported* here; the host is the one that actually asks
   Cocoa / Win32 / GTK to go full screen. }

@@ -4,7 +4,7 @@ This note is for someone who wants to **build and run** the tribute on each OS, 
 
 You do not need to be a Cocoa, Win32, or GTK expert. The same ideas show up in Goody's Calculator, the RISC OS Clock, Eyes, the Grouch, and Moiré: an entry point, a model, a software canvas, and a native host that only presents bytes.
 
-There is **no Lazarus form**, **no SDL2**, and **no HTML**. Each index row is a rectangle in a layout. A click that lands inside a rectangle becomes an entry index. The model mutates a phase (`idle` / `searching` / `typing`) and a visible-character count. The renderer turns that into an RGBA buffer. The host only uploads the buffer.
+There is **no Lazarus form**, **no SDL2**, and **no HTML**. Each index row is a rectangle in a layout. A click that lands inside a rectangle becomes an entry index. The model mutates a phase (`idle` / `searching` / `typing`), a visible-character count, and a tiny sfx queue. The renderer turns that into an RGBA buffer. The host uploads the buffer and drains the queue into `NSSound` / `PlaySound` / `paplay`.
 
 This is a **timer-driven CRT**, not a static form like the calculator. Scanlines crawl at ~20 Hz even while you read. A page turn is a short state machine on top of that pulse.
 
@@ -17,7 +17,7 @@ Work from the project root. `fpc` must be on `PATH`. Output always lands in `bui
 | macOS app | `make` then `make run` | `build/HitchHikersGuide.app`, opened |
 | Linux / Raspberry Pi OS | `sudo apt install fpc libgtk2.0-dev` then `make linux` then `./build/hitchhikersguide` | GTK 2 window |
 | Windows 10+ | from a native FPC prompt: `make windows` then `build\HitchHikersGuide.exe` | taskbar window |
-| Headless encyclopedia checks | `make test` | prints `ok` lines; non-zero if a phase is wrong |
+| Headless encyclopedia / sfx checks | `make test` | prints `ok` lines; non-zero if a phase or WAV header is wrong |
 | Frozen canvas frames | `make snap` | `build/snap-earth.ppm`, `snap-search.ppm`, `snap-42.ppm`, `snap-wide.ppm` |
 | Start over | `make clean` | deletes `build/` |
 
@@ -37,7 +37,9 @@ make linux
 ./build/hitchhikersguide
 ```
 
-Windows: install FPC, open its command prompt so `fpc` is on `PATH`, then `make windows`. The `Windows` unit ships with FPC; no extra SDK is required for this app.
+Windows: install FPC, open its command prompt so `fpc` is on `PATH`, then `make windows`. The `Windows` and `MMSystem` units ship with FPC; `PlaySound` links against winmm. No extra SDK is required.
+
+Linux sound is best-effort: the host writes `hhg-search.wav` / `hhg-found.wav` / `hhg-type.wav` under the temp dir and shells `paplay || aplay`. Install `pulseaudio-utils` or `alsa-utils` if the tube is silent.
 
 Only **one** host unit is compiled. `{$IFDEF DARWIN}` / `WINDOWS` / else picks `uhostcocoa`, `uhostwin`, or `uhostgtk`. Cross-compiling the GUI hosts is not a supported workflow — build on the OS you want to run on.
 
@@ -66,17 +68,18 @@ guide.pas begin
            → RenderGuide (RGBA pixels)
            → host shows the buffer
       → key / click
-           → Model.Press / SelectIndex
+           → Model.Press / SelectIndex  (queues sfxSearch)
+           → drain sfx → play
            → idle → searching → typing → idle
 ```
 
 | Layer | Unit | Tester-friendly analogy |
 |-------|------|-------------------------|
 | Entry / routing | `guide.pas` | Test runner that picks the OS host at compile time |
-| State | `uguidemodel` | Fixture: nine entries, current index, phase, visible chars |
+| State | `uguidemodel` | Fixture: nine entries, current index, phase, visible chars, sfx queue |
 | Composer | `uguideapp` | Holds the model and the canvas; `NeedsPresent` is the dirty flag |
 | View | `uguiderender` | The thing that actually paints the CRT frame, glyphs, and art |
-| Chip sounds | `uguideaudio` | In-memory WAVs: search chirp, two-note found beep |
+| Chip sounds | `uguideaudio` | In-memory WAVs: search chirp, found beep, per-letter pip |
 | Window shell | `uhostcocoa` / `uhostwin` / `uhostgtk` | Window, timer, fullscreen, About / Quit, sfx playback |
 
 The hosts are **event-driven**. Almost everything after `HostRun` runs on the GUI thread. That is why the tube uses `NSTimer` / `SetTimer` / `g_timeout_add` instead of a raw `while true` loop.
@@ -99,8 +102,9 @@ Holds *behaviour*, not pixels:
 - `FVisibleChars` — how much of the body has typed on
 - `FScanlineOffset` — 0..3, crawls every tick
 - `FFlicker` — 0..7, a cheap phosphor pulse
+- `FSfx[0..7]` — queued `sfxSearch` / `sfxFound` / `sfxType`; hosts `DrainSfx`
 
-`Press` and `SelectIndex` never paint. They call `BeginSearch`, which is the state change from “this page” to “fetching that page”, and queue `sfxSearch`. `Tick` is the only place `searching` becomes `typing` (and queues `sfxFound`) and `typing` becomes `idle`.
+`Press` and `SelectIndex` never paint. They call `BeginSearch`, which is the state change from “this page” to “fetching that page”, and queue `sfxSearch`. `Tick` is the only place `searching` becomes `typing` (queues `sfxFound`, body still empty that tick) and `typing` becomes `idle`. Each typing tick adds one glyph and queues `sfxType`.
 
 `ShowImmediate` skips the fanfare (first paint, snaps, tests) and clears any queued sfx. `Freeze` stops time so a snapshot does not drift.
 
@@ -128,13 +132,15 @@ Hosts drain `Model.DrainSfx` on the timer and after keys/clicks, then play with 
 
 Each host:
 
-1. Creates the controller at the native pixel size (retina-scaled on macOS)
-2. Builds a titled window, About / Quit, View → Full Screen
-3. Starts a 50 ms timer
-4. Forwards keys (`TGuideKey`) and mouse (canvas coordinates)
-5. Uploads `Canvas.Ptr` (`NSImage` / `StretchDIBits` / `GdkPixbuf`)
+1. Builds the three in-memory WAVs once (`BuildSfxWav`)
+2. Creates the controller at the native pixel size (retina-scaled on macOS)
+3. Builds a titled window, About / Quit, View → Full Screen
+4. Starts a 50 ms timer
+5. Forwards keys (`TGuideKey`) and mouse (canvas coordinates)
+6. Drains `Model.DrainSfx` on the timer and after a key or click, then plays
+7. Uploads `Canvas.Ptr` (`NSImage` / `StretchDIBits` / `GdkPixbuf`)
 
-They do not know what Forty-two means.
+They do not know what Forty-two means. They also do not mix the samples — if you mash Next during a search, a new chirp simply joins the ring.
 
 ## Page-turn state machine
 
@@ -148,8 +154,8 @@ They do not know what Forty-two means.
                       │
                       ▼
                   gpTyping
-           (one glyph / 50 ms, pip per letter)
-            + sfxType after the found beep
+            first tick: sfxFound, body still empty
+            then: one glyph / 50 ms + sfxType pip
                       │
                       ▼
                    gpIdle
@@ -164,4 +170,4 @@ Selecting the page you are already idle on is a no-op. Selecting a page during s
 - **There is no preferences file.** The nine entries are constants in `uguidemodel`. A test that wants Babel Fish should press `gkJump2` (or `gkNext` from Earth), not edit a config.
 - **Exit is process-level** (`terminate` / `PostQuitMessage` / `gtk_main_quit`). Closing the window **quits**, unlike Eyes where close hid the desktop pair and left the extra running. **Esc** in a windowed tube also quits; in fullscreen it only leaves fullscreen.
 - **The painted index rows are the real hit targets.** If a click misses a row, `HitTestIndex` returns `-1` and the model does not change. You are not testing a native `NSButton`.
-- **`make test`** exercises the engine without a GUI. Use that for wrap-around and phases; use the window for hit-testing, hover, and keyboard mapping.
+- **`make test`** exercises the engine without a GUI. Use that for wrap-around, phases, WAV headers, and the sfx queue; use the window for hit-testing, hover, keyboard mapping, and actually hearing the pips.
