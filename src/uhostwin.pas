@@ -18,6 +18,19 @@ implementation
 uses
   Windows, Messages, SysUtils, MMSystem, uguidemodel, uguiderender, uguideapp, uguideaudio;
 
+{ FPC 3.2.2's Win32 Windows unit has no multi-monitor API. user32 does. }
+{$if not declared(MonitorFromWindow)}
+type
+  HMONITOR = type THandle;
+  TMonitorInfo = record
+    cbSize: DWORD;
+    rcMonitor: TRect;
+    rcWork: TRect;
+    dwFlags: DWORD;
+  end;
+  PMonitorInfo = ^TMonitorInfo;
+{$endif}
+
 const
   AppName = 'HitchHikersGuideWnd';
   CmdAbout = 1001;
@@ -29,6 +42,9 @@ const
   MinH = 380;
   TickId = 1;
   TickMs = 50;
+{$if not declared(MONITOR_DEFAULTTONEAREST)}
+  MONITOR_DEFAULTTONEAREST = 2;
+{$endif}
 
 var
   Controller: TGuideController;
@@ -43,6 +59,13 @@ var
   SfxWav: array[sfxSearch..sfxType] of TBytes;
   SfxHold: array[0..3] of TBytes;
   SfxSlot: Integer;
+
+{$if not declared(MonitorFromWindow)}
+function MonitorFromWindow(hwnd: HWND; dwFlags: DWORD): HMONITOR; stdcall;
+  external 'user32.dll' name 'MonitorFromWindow';
+function GetMonitorInfo(hMonitor: HMONITOR; lpmi: PMonitorInfo): BOOL; stdcall;
+  external 'user32.dll' name 'GetMonitorInfoA';
+{$endif}
 
 procedure PlaySfx(Kind: TSfxKind);
 begin
