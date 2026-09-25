@@ -106,7 +106,7 @@ macOS plays them with `NSSound`. Windows uses `PlaySound` (winmm). Linux tries `
 | **macOS** | Titled, resizable window, Dock icon, native fullscreen Space. |
 | **Windows** | Titled, resizable window on the taskbar, F11 monitor-filling popup. |
 | **Linux** | GTK 2 window (Raspberry Pi OS friendly), F11 `gtk_window_fullscreen`. |
-
+ uhostgtk
 Closing the window **quits** the process. This is a desk Guide, not a menu extra.
 
 ## Project layout
