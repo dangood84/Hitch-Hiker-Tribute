@@ -16,7 +16,7 @@ There is no Swing EDT. `NSView.keyDown` and `NSImage.drawInRect` run on the same
 
 **1.** The OS loads `HitchHikersGuide.app/Contents/MacOS/HitchHikersGuide` (or `./build/HitchHikersGuide`). FPC unit initialisation runs (`TGuideModel` is not constructed yet).
 
-**2.** `program HitchHikersGuide` executes `HostRun`.
+**2.** `program HitchHikersGuide` executes `HostRun`. On Linux and macOS the program uses `cthreads` before the host unit, because the playback feed is a thread and Free Pascal will not start one without that driver.
 
 ```pascal
 { src/guide.pas }

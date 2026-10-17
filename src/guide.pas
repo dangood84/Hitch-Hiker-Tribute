@@ -16,6 +16,9 @@ program HitchHikersGuide;
   Build: see the Makefile. }
 
 uses
+  {$IFDEF UNIX}
+  cthreads, { first, or Linux refuses the playback thread at startup }
+  {$ENDIF}
   {$IFDEF DARWIN}
   uhostcocoa
   {$ELSE}

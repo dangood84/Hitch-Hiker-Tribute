@@ -43,7 +43,9 @@ uses
 
 var
   Mixer: TGuideMixer;
-  ChannelOpen: Boolean;
+  {$IFNDEF LINUX}
+  ChannelOpen: Boolean; { read on macOS and Windows; the Linux feed just runs }
+  {$ENDIF}
 
 procedure GuidePlay(Kind: TSfxKind);
 begin
@@ -470,7 +472,6 @@ begin
       Continue;
     end;
     { State change: raw stream open. Silence from here keeps the port awake. }
-    ChannelOpen := True;
     while not Terminated and (Player <> nil) and Player.Running do
     begin
       if Mixer <> nil then
@@ -488,7 +489,6 @@ begin
       else
         Sleep(LongInt(Next - Now));
     end;
-    ChannelOpen := False;
     EnterCriticalSection(PlayerLock);
     try
       FreeAndNil(Player);
@@ -547,7 +547,6 @@ begin
     DoneCriticalSection(PlayerLock);
     LockReady := False;
   end;
-  ChannelOpen := False;
   FreeAndNil(Mixer);
 end;
 
