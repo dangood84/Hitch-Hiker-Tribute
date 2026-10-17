@@ -4,7 +4,7 @@ This note is for someone who wants to **build and run** the tribute on each OS, 
 
 You do not need to be a Cocoa, Win32, or GTK expert. The same ideas show up in Goody's Calculator, the RISC OS Clock, Eyes, the Grouch, and Moiré: an entry point, a model, a software canvas, and a native host that only presents bytes.
 
-There is **no Lazarus form**, **no SDL2**, and **no HTML**. Each index row is a rectangle in a layout. A click that lands inside a rectangle becomes an entry index. The model mutates a phase (`idle` / `searching` / `typing`), a visible-character count, and a tiny sfx queue. The renderer turns that into an RGBA buffer. The host uploads the buffer and drains the queue into `NSSound` / `PlaySound` / `paplay`.
+There is **no Lazarus form**, **no SDL2**, and **no HTML**. Each index row is a rectangle in a layout. A click that lands inside a rectangle becomes an entry index. The model mutates a phase (`idle` / `searching` / `typing`), a visible-character count, and a tiny sfx queue. The renderer turns that into an RGBA buffer. The host uploads the buffer and drains the queue into one already-open audio stream.
 
 This is a **timer-driven CRT**, not a static form like the calculator. Scanlines crawl at ~20 Hz even while you read. A page turn is a short state machine on top of that pulse.
 
@@ -37,9 +37,9 @@ make linux
 ./build/hitchhikersguide
 ```
 
-Windows: install FPC, open its command prompt so `fpc` is on `PATH`, then `make windows`. The `Windows` and `MMSystem` units ship with FPC; `PlaySound` links against winmm. No extra SDK is required.
+Windows: install FPC, open its command prompt so `fpc` is on `PATH`, then `make windows`. The `Windows` and `MMSystem` units ship with FPC; `waveOut` links against winmm. No extra SDK is required.
 
-Linux sound is best-effort: the host writes `hhg-search.wav` / `hhg-found.wav` / `hhg-type.wav` under the temp dir and shells `paplay || aplay`. Install `pulseaudio-utils` or `alsa-utils` if the tube is silent.
+Linux sound is one raw player for the life of the process: `pw-play`, else `paplay`, else `aplay`. Install `pipewire-bin`, `pulseaudio-utils`, or `alsa-utils` if the tube is silent. Nothing is written to the temp dir.
 
 Only **one** host unit is compiled. `{$IFDEF DARWIN}` / `WINDOWS` / else picks `uhostcocoa`, `uhostwin`, or `uhostgtk`. Cross-compiling the GUI hosts is not a supported workflow — build on the OS you want to run on.
 
@@ -64,7 +64,7 @@ guide.pas begin
       → create titled, resizable window
       → timer (~20 Hz)
            → Model.Tick (scanlines, search, typing)
-           → drain sfx queue → NSSound / PlaySound / paplay
+           → drain sfx queue → mix into the open stream
            → RenderGuide (RGBA pixels)
            → host shows the buffer
       → key / click
@@ -126,21 +126,27 @@ Holds *behaviour*, not pixels:
 
 `BuildSfxWav` writes in-memory WAVs (22050 Hz, 16-bit mono). Search is a stuttering rising/falling square-wave chirp. Found is a short G5–D6 beep. Type is a short F6 pip, one per letter. Original tribute tones, not the BBC TV soundtrack.
 
-Hosts drain `Model.DrainSfx` on the timer and after keys/clicks, then play with `NSSound` / `PlaySound` / `paplay`.
+`TGuideMixer` turns those WAVs into PCM and mixes whatever is playing into the next block of samples a host asks for. A cue starts at the front of that block. It is not appended behind a buffer of earlier silence, which is how a pip used to arrive after its letter.
+
+### `uguideplay` — one open channel
+
+The stream starts in `GuidePlayStart`, before the first click, and `GuidePlayStop` closes it on quit. Silence keeps flowing the whole time, so the device is already awake when the first index row is chosen. macOS is a three-buffer `AudioQueue` (~36 ms). Windows is four small `waveOut` buffers. Linux is one `pw-play` / `paplay` / `aplay` raw process, paced at real time, with the pipe shrunk so it cannot hold a second of audio.
+
+Hosts drain `Model.DrainSfx` on the timer and after keys/clicks, then `GuidePlay` arms the mixer. They do not open a player per sound.
 
 ### Hosts — window shell
 
 Each host:
 
-1. Builds the three in-memory WAVs once (`BuildSfxWav`)
+1. Opens the playback stream (`GuidePlayStart`) so the speaker is awake before the first click
 2. Creates the controller at the native pixel size (retina-scaled on macOS)
 3. Builds a titled window, About / Quit, View → Full Screen
 4. Starts a 50 ms timer
 5. Forwards keys (`TGuideKey`) and mouse (canvas coordinates)
-6. Drains `Model.DrainSfx` on the timer and after a key or click, then plays
+6. Drains `Model.DrainSfx` on the timer and after a key or click, then arms the mixer
 7. Uploads `Canvas.Ptr` (`NSImage` / `StretchDIBits` / `GdkPixbuf`)
 
-They do not know what Forty-two means. They also do not mix the samples — if you mash Next during a search, a new chirp simply joins the ring.
+They do not know what Forty-two means. Overlapping cues (the found beep under the first few pips, or a new chirp if you turn the page mid-sentence) add in the mixer. Nothing is stopped to make room for the next letter.
 
 ## Page-turn state machine
 

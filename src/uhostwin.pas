@@ -4,8 +4,8 @@ unit uhostwin;
 
 { Windows titled, resizable window on the taskbar. Same TGuideController
   as macOS; this unit presents pixels (BGRA StretchDIBits), a 50 ms
-  timer, original WAV stings via PlaySound, keys / clicks, and F11 /
-  double-click fullscreen. }
+  timer, keys / clicks, and F11 / double-click fullscreen. Sound is one
+  waveOut stream opened at launch (uguideplay), not a PlaySound per pip. }
 
 interface
 
@@ -16,7 +16,7 @@ implementation
 {$IFDEF WINDOWS}
 
 uses
-  Windows, Messages, SysUtils, MMSystem, uguidemodel, uguiderender, uguideapp, uguideaudio;
+  Windows, Messages, SysUtils, uguidemodel, uguiderender, uguideapp, uguideaudio, uguideplay;
 
 { FPC 3.2.2's Win32 Windows unit has no multi-monitor API. user32 does. }
 {$if not declared(MonitorFromWindow)}
@@ -56,9 +56,6 @@ var
   SavedRect: TRect;
   SavedMenu: HMENU;
   TrackingLeave: Boolean;
-  SfxWav: array[sfxSearch..sfxType] of TBytes;
-  SfxHold: array[0..3] of TBytes;
-  SfxSlot: Integer;
 
 {$if not declared(MonitorFromWindow)}
 function MonitorFromWindow(hwnd: HWND; dwFlags: DWORD): HMONITOR; stdcall;
@@ -67,18 +64,6 @@ function GetMonitorInfo(hMonitor: HMONITOR; lpmi: PMonitorInfo): BOOL; stdcall;
   external 'user32.dll' name 'GetMonitorInfoA';
 {$endif}
 
-procedure PlaySfx(Kind: TSfxKind);
-begin
-  if (Kind < sfxSearch) or (Kind > sfxType) then
-    Exit;
-  if Length(SfxWav[Kind]) < 44 then
-    Exit;
-  { PlaySound SND_MEMORY needs the buffer to stay alive until it finishes. }
-  SfxHold[SfxSlot] := SfxWav[Kind];
-  PlaySound(PChar(@SfxHold[SfxSlot][0]), 0, SND_MEMORY or SND_ASYNC or SND_NODEFAULT);
-  SfxSlot := (SfxSlot + 1) mod Length(SfxHold);
-end;
-
 procedure DrainAudio;
 var
   Kind: TSfxKind;
@@ -86,7 +71,7 @@ begin
   if Controller = nil then
     Exit;
   while Controller.Model.DrainSfx(Kind) do
-    PlaySfx(Kind);
+    GuidePlay(Kind);
 end;
 
 function ClientToCanvas(Wnd: HWND; X, Y: Integer; out CX, CY: Double): Boolean;
@@ -377,14 +362,11 @@ var
   Msg: TMsg;
   Wr: TRect;
   Style: DWORD;
-  Kind: TSfxKind;
 begin
   Controller := TGuideController.Create(WinW, WinH);
   FullScreen := False;
   TrackingLeave := False;
-  SfxSlot := 0;
-  for Kind := sfxSearch to sfxType do
-    SfxWav[Kind] := BuildSfxWav(Kind);
+  GuidePlayStart;
   AppMenuBar := BuildMenu;
 
   FillChar(WC, SizeOf(WC), 0);
@@ -417,6 +399,7 @@ begin
     TranslateMessage(Msg);
     DispatchMessage(Msg);
   end;
+  GuidePlayStop;
   Controller.Free;
 end;
 

@@ -5,8 +5,9 @@ unit uhostcocoa;
 
 { macOS titled, resizable window. Regular activation policy so there is a
   Dock icon. Same TGuideController as Windows/Linux; this unit presents
-  pixels, runs the 50 ms CRT timer, plays original WAV stings, and
-  forwards keys / clicks / fullscreen. }
+  pixels, runs the 50 ms CRT timer, and forwards keys / clicks /
+  fullscreen. Sound is one AudioQueue opened at launch (uguideplay),
+  not a fresh NSSound per pip. }
 
 interface
 
@@ -15,7 +16,7 @@ procedure HostRun;
 implementation
 
 uses
-  SysUtils, Math, CocoaAll, uguidemodel, uguideapp, uguideaudio;
+  SysUtils, Math, CocoaAll, uguidemodel, uguideapp, uguideaudio, uguideplay;
 
 const
   WinPointsW = 760;
@@ -45,9 +46,9 @@ type
     frameImage: NSImage;
     animTimer: NSTimer;
     scale: Double;
-    sfxSlot: Integer;
     ready: ObjCBOOL;
     procedure applicationDidFinishLaunching(notification: NSNotification); message 'applicationDidFinishLaunching:';
+    procedure applicationWillTerminate(notification: NSNotification); message 'applicationWillTerminate:';
     function applicationShouldTerminateAfterLastWindowClosed(sender: NSApplication): ObjCBOOL; message 'applicationShouldTerminateAfterLastWindowClosed:';
     procedure quitAction(sender: id); message 'quitAction:';
     procedure aboutAction(sender: id); message 'aboutAction:';
@@ -85,8 +86,6 @@ type
 
 var
   SharedApp: TAppDelegate;
-  SfxWav: array[sfxSearch..sfxType] of TBytes;
-  SfxRing: array[0..5] of NSSound;
 
 function NSStr(const S: string): NSString;
 begin
@@ -190,29 +189,6 @@ begin
   controller.Resize(PW, PH);
 end;
 
-procedure PlaySfx(Kind: TSfxKind);
-var
-  Data: NSData;
-  Bytes: TBytes;
-begin
-  if (Kind < sfxSearch) or (Kind > sfxType) then
-    Exit;
-  Bytes := SfxWav[Kind];
-  if Length(Bytes) < 44 then
-    Exit;
-  Data := NSData.dataWithBytes_length(@Bytes[0], Length(Bytes));
-  if SfxRing[SharedApp.sfxSlot] <> nil then
-  begin
-    SfxRing[SharedApp.sfxSlot].stop;
-    SfxRing[SharedApp.sfxSlot].release;
-    SfxRing[SharedApp.sfxSlot] := nil;
-  end;
-  SfxRing[SharedApp.sfxSlot] := NSSound.alloc.initWithData(Data);
-  if SfxRing[SharedApp.sfxSlot] <> nil then
-    SfxRing[SharedApp.sfxSlot].play;
-  SharedApp.sfxSlot := (SharedApp.sfxSlot + 1) mod Length(SfxRing);
-end;
-
 procedure TAppDelegate.drainAudio;
 var
   Kind: TSfxKind;
@@ -220,7 +196,7 @@ begin
   if controller = nil then
     Exit;
   while controller.Model.DrainSfx(Kind) do
-    PlaySfx(Kind);
+    GuidePlay(Kind);
 end;
 
 procedure TAppDelegate.tick(timer: NSTimer);
@@ -286,12 +262,14 @@ var
   PixelScale: Double;
   Style: NSUInteger;
   Rect, Vis: NSRect;
-  Kind: TSfxKind;
-  I: Integer;
 begin
   if ready then
     Exit;
   ready := True;
+
+  { Wake the speaker before the first index click. Silence holds the
+    channel open; the chirp and the pips are mixed into it later. }
+  GuidePlayStart;
 
   PixelScale := 2;
   if NSScreen.mainScreen <> nil then
@@ -299,11 +277,6 @@ begin
   if PixelScale < 1 then
     PixelScale := 1;
   scale := PixelScale;
-  sfxSlot := 0;
-  for Kind := sfxSearch to sfxType do
-    SfxWav[Kind] := BuildSfxWav(Kind);
-  for I := 0 to High(SfxRing) do
-    SfxRing[I] := nil;
 
   controller := TGuideController.Create(
     Round(WinPointsW * scale), Round(WinPointsH * scale));
@@ -355,22 +328,19 @@ begin
   setup;
 end;
 
+procedure TAppDelegate.applicationWillTerminate(notification: NSNotification);
+begin
+  GuidePlayStop; { close the stream before the run loop tears the process down }
+end;
+
 function TAppDelegate.applicationShouldTerminateAfterLastWindowClosed(sender: NSApplication): ObjCBOOL;
 begin
   Result := True; { close box quits — a desk Guide, not a menu extra }
 end;
 
 procedure TAppDelegate.quitAction(sender: id);
-var
-  I: Integer;
 begin
-  for I := 0 to High(SfxRing) do
-    if SfxRing[I] <> nil then
-    begin
-      SfxRing[I].stop;
-      SfxRing[I].release;
-      SfxRing[I] := nil;
-    end;
+  GuidePlayStop;
   NSApplication.sharedApplication.terminate(nil);
 end;
 
@@ -569,6 +539,7 @@ begin
   App.setDelegate(SharedApp);
   SharedApp.setup; { do not wait for didFinishLaunching; first paint before App.run }
   App.run;
+  GuidePlayStop;
   Pool.release;
 end;
 

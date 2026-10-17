@@ -172,8 +172,62 @@ begin
   end;
 end;
 
+function SampleMag(S: SmallInt): Integer;
+begin
+  Result := Integer(S);
+  if Result < 0 then
+    Result := -Result;
+end;
+
+function BufferPeak(const Buf: array of SmallInt): Integer;
+var
+  I, M: Integer;
+begin
+  Result := 0;
+  for I := 0 to High(Buf) do
+  begin
+    M := SampleMag(Buf[I]);
+    if M > Result then
+      Result := M;
+  end;
+end;
+
+procedure RunMixer;
+var
+  Mix: TGuideMixer;
+  Buf: array[0..799] of SmallInt;
+  I: Integer;
+begin
+  { The mixer must put a cue in the very next slice. A backlog of
+    silence ahead of that cue is how the pips fall behind the letters. }
+  Mix := TGuideMixer.Create;
+  try
+    Mix.Render(@Buf[0], Length(Buf));
+    ExpectEq('idle mix is silence', BufferPeak(Buf), 0);
+    ExpectEq('idle mix has no voice', Mix.ActiveVoices, 0);
+
+    Mix.Render(@Buf[0], Length(Buf));
+    Mix.Trigger(sfxType);
+    ExpectEq('pip arms one voice', Mix.ActiveVoices, 1);
+    Mix.Render(@Buf[0], 200);
+    ExpectTrue('pip is in the next slice', BufferPeak(Buf) > 1000);
+
+    Mix.Trigger(sfxFound);
+    ExpectEq('found joins the pip', Mix.ActiveVoices, 2);
+
+    for I := 1 to 8 do
+      Mix.Render(@Buf[0], Length(Buf));
+    ExpectEq('voices end, they do not linger', Mix.ActiveVoices, 0);
+    Mix.Render(@Buf[0], Length(Buf));
+    ExpectEq('channel returns to silence', BufferPeak(Buf), 0);
+  finally
+    Mix.Free;
+  end;
+end;
+
 begin
   Run;
+  RunMixer;
   if Failed > 0 then
   begin
     WriteLn(Failed, ' test(s) failed.');

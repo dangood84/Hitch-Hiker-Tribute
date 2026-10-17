@@ -35,7 +35,7 @@ Debian / Raspberry Pi OS:
 sudo apt install fpc libgtk2.0-dev
 ```
 
-Optional, so the stings play: `pulseaudio-utils` (`paplay`) or `alsa-utils` (`aplay`).
+Optional, so the stings play on Linux: `pipewire-bin` (`pw-play`), `pulseaudio-utils` (`paplay`), or `alsa-utils` (`aplay`). The program keeps that player open.
 
 Windows 10+: a native Free Pascal install (the `Windows` / `MMSystem` units ship with FPC).
 
@@ -87,7 +87,9 @@ All three cues are **original square-wave WAVs** built in memory at launch (`ugu
 | The page is found, just before letters appear | Two-note “page ready” beep (`sfxFound`) |
 | Each letter types onto the phosphor | Short F6 pip (`sfxType`) |
 
-macOS plays them with `NSSound`. Windows uses `PlaySound` (winmm). Linux tries `paplay`, then `aplay`. The tube still runs if those players are missing; it is just quiet.
+One playback stream opens when the tube does, and stays open, full of silence, until quit. The first index chirp is not what has to wake the speaker — that wake already happened while Earth was sitting on the screen. Each later pip is mixed into the next short slice of that same stream, so the blips cannot queue up behind the letters.
+
+macOS uses a short `AudioQueue`. Windows uses `waveOut` with a handful of small buffers. Linux writes raw samples into one `pw-play` (or `paplay`, or `aplay`) process and paces that write in real time, with the pipe kept small. The tube still runs if the player is missing; it is just quiet.
 
 ## Keyboard
 
@@ -117,11 +119,12 @@ src/
   uguidemodel.pas    # entries, page-turn phases, scanline offset, sfx queue
   uguiderender.pas   # software RGBA canvas (CRT frame, glyphs, art)
   uguideapp.pas      # TGuideController: hit-test, tick, present flag
-  uguideaudio.pas    # original WAV search chirp, found beep, letter pip
+  uguideaudio.pas    # original WAV search chirp, found beep, letter pip, live mixer
+  uguideplay.pas     # one open stream: AudioQueue / waveOut / pw-play
   ubitmapfont.pas    # 8×8 glyphs (no native text APIs)
-  uhostcocoa.pas     # macOS NSWindow + NSSound
-  uhostwin.pas       # Windows HWND + PlaySound
-  uhostgtk.pas       # Linux GtkWindow + paplay/aplay
+  uhostcocoa.pas     # macOS NSWindow
+  uhostwin.pas       # Windows HWND
+  uhostgtk.pas       # Linux GtkWindow
   guidetest.pas      # headless encyclopedia / phase / sfx checks
   guidesnap.pas      # paints PPM frames without a window
 bundle/

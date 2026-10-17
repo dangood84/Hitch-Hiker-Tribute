@@ -57,13 +57,14 @@ Linux: `gtk_init`, `gtk_window_new`, drawing area, `gtk_main`.
 
 **5.** Pixel scale: `NSScreen.mainScreen.backingScaleFactor` (typically `2`). Controller buffer is in **pixels**, window size in **points** (760×540).
 
+`GuidePlayStart` has already run, at the top of `setup`, before this. It opens the playback stream and feeds it silence, so the speaker is awake before anyone touches the index. The mixer builds the three cues in memory; nothing is read from disk.
+
 **6.** `controller := TGuideController.Create(pixelW, pixelH)`:
 
 - `TGuideModel.Create` — Earth selected, `gpIdle`, body fully visible, scanline 0, sfx queue empty
 - `Canvas` `TPixelBuffer` allocated (RGBA)
 - `HoverIndex` / `PressedIndex` = `-1`
 - `NeedsPresent` = True so the first frame is not blank
-- Host also builds the three in-memory WAVs (`sfxSearch`, `sfxFound`, `sfxType`) once; nothing is read from disk
 
 **7.** Application menu targets the delegate: `aboutAction:`, `quitAction:` with **⌘Q**. View menu: Full Screen with **Ctrl+Cmd+F**.
 
@@ -92,7 +93,7 @@ Linux: `g_timeout_add(50, ...)`.
 
 ```pascal
 controller.Tick;          { Model.Tick: scanline 0→1→2→3→0, flicker 0..7 }
-drainAudio;               { DrainSfx → NSSound; idle queue is empty }
+drainAudio;               { DrainSfx → mixer; idle queue is empty, stream stays silent }
 if controller.NeedsPresent then
   redraw;
 ```
@@ -130,7 +131,7 @@ PhaseTick := 0
 PushSfx(sfxSearch)          { stuttering computer chirp }
 ```
 
-Then `drainAudio` (from `keyDown`) plays that chirp. The timer will drain any later found/type cues.
+Then `drainAudio` (from `keyDown`) arms that chirp on the mixer. It is mixed into the next slice of the stream that has been open since setup — it does not start a new player, and it does not wait behind audio that was queued earlier. The timer drains any later found/type cues the same way. A pip is one slice behind its glyph at most, and that gap does not grow as the paragraph types on.
 
 **17.** The next paints show the index caret on `>2 BABEL FISH` and, in the content well, concentric frames plus `RESEARCHING...`. The body is empty (`VisibleBody = ''`).
 
@@ -152,8 +153,8 @@ Phase  typing → idle        { State change: the page sits on the phosphor }
 
 Babel Fish is now fully typed. Scanlines keep crawling.
 
-Windows: `WM_KEYDOWN` with `VK_RIGHT` is the same `gkNext`, then `PlaySound`.
-Linux: `GDK_Right` likewise, then `paplay` / `aplay`.
+Windows: `WM_KEYDOWN` with `VK_RIGHT` is the same `gkNext`, then the same mixer into `waveOut`.
+Linux: `GDK_Right` likewise, into the raw stream that has been open since `gtk_init`.
 
 Clicking index row 2 is the same model call (`SelectIndex(1)`), after the classic press/release rule: mouse-up must land on the same row mouse-down started on.
 
@@ -173,6 +174,6 @@ Clicking index row 2 is the same model call (`SelectIndex(1)`), after the classi
 
 ## Headless paths
 
-`make test` compiles `guidetest.pas` against `uguidemodel` and `uguideaudio`. No host, no canvas, no speaker. It checks wrap, jump, the three phases, WAV headers, the search/found/type sfx queue, freeze, and that Earth still says harmless.
+`make test` compiles `guidetest.pas` against `uguidemodel` and `uguideaudio`. No host, no canvas, no speaker. It checks wrap, jump, the three phases, WAV headers, the search/found/type sfx queue, freeze, that Earth still says harmless, and that a pip lands in the next mixer slice instead of behind a backlog of silence.
 
 `make snap` constructs a `TGuideController` at 1520×1080, writes four PPM files, and exits. `ShowImmediate` clears the sfx queue, so snapshots never leave a chirp pending. Useful when you want to see the CRT without opening a window.

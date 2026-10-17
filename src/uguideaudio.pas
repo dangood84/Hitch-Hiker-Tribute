@@ -10,10 +10,32 @@ unit uguideaudio;
 interface
 
 uses
-  SysUtils;
+  SysUtils, SyncObjs;
+
+const
+  GuideSfxRate = 22050; { 16-bit mono. Hosts keep one stream open at this rate. }
 
 type
   TSfxKind = (sfxNone, sfxSearch, sfxFound, sfxType);
+
+  { Mixes the three cues into a live 22050 Hz stream. Trigger starts a
+    voice at the next slice the host asks for — there is no backlog, so
+    a pip cannot sit behind earlier audio and drift away from its letter. }
+  TGuideMixer = class
+  private
+    FLock: TCriticalSection;
+    FPcm: array[sfxSearch..sfxType] of array of SmallInt;
+    FKind: array[0..7] of TSfxKind;
+    FPos: array[0..7] of Integer;
+    FOn: array[0..7] of Boolean;
+    procedure LoadKind(Kind: TSfxKind);
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Trigger(Kind: TSfxKind);
+    procedure Render(Dest: PSmallInt; Frames: Integer);
+    function ActiveVoices: Integer;
+  end;
 
 function BuildSfxWav(Kind: TSfxKind): TBytes;
 function SfxName(Kind: TSfxKind): string;
@@ -24,7 +46,7 @@ uses
   Math;
 
 const
-  Rate = 22050;
+  Rate = GuideSfxRate;
 
 procedure WriteWavHeader(var Bytes: TBytes; Samples: Integer);
 var
@@ -194,6 +216,128 @@ begin
     sfxType: Result := 'type';
     else
       Result := 'none';
+  end;
+end;
+
+procedure TGuideMixer.LoadKind(Kind: TSfxKind);
+var
+  Wav: TBytes;
+  Samples, I: Integer;
+begin
+  Wav := BuildSfxWav(Kind);
+  Samples := (Length(Wav) - 44) div 2;
+  if Samples < 1 then
+  begin
+    SetLength(FPcm[Kind], 0);
+    Exit;
+  end;
+  SetLength(FPcm[Kind], Samples);
+  for I := 0 to Samples - 1 do
+    FPcm[Kind][I] := SmallInt(Word(Wav[44 + I * 2]) or (Word(Wav[45 + I * 2]) shl 8));
+end;
+
+constructor TGuideMixer.Create;
+var
+  Kind: TSfxKind;
+  V: Integer;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+  for Kind := sfxSearch to sfxType do
+    LoadKind(Kind);
+  for V := 0 to High(FOn) do
+    FOn[V] := False;
+end;
+
+destructor TGuideMixer.Destroy;
+begin
+  FLock.Free;
+  inherited Destroy;
+end;
+
+procedure TGuideMixer.Trigger(Kind: TSfxKind);
+var
+  V, Slot, Oldest: Integer;
+begin
+  if (Kind < sfxSearch) or (Kind > sfxType) then
+    Exit;
+  if Length(FPcm[Kind]) < 1 then
+    Exit;
+  FLock.Enter;
+  try
+    Slot := -1;
+    Oldest := 0;
+    for V := 0 to High(FOn) do
+      if not FOn[V] then
+      begin
+        Slot := V;
+        Break;
+      end
+      else if FPos[V] > FPos[Oldest] then
+        Oldest := V;
+    if Slot < 0 then
+      Slot := Oldest; { every voice busy: the one furthest along yields }
+    { State change: this cue starts at the next rendered slice.
+      It is mixed into the open channel, not parked behind it. }
+    FKind[Slot] := Kind;
+    FPos[Slot] := 0;
+    FOn[Slot] := True;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+procedure TGuideMixer.Render(Dest: PSmallInt; Frames: Integer);
+var
+  V, I, N, P, S: Integer;
+  Kind: TSfxKind;
+begin
+  if (Dest = nil) or (Frames < 1) then
+    Exit;
+  FillChar(Dest^, Frames * SizeOf(SmallInt), 0);
+  FLock.Enter;
+  try
+    for V := 0 to High(FOn) do
+    begin
+      if not FOn[V] then
+        Continue;
+      Kind := FKind[V];
+      P := FPos[V];
+      N := Frames;
+      if P >= Length(FPcm[Kind]) then
+        N := 0
+      else if P + N > Length(FPcm[Kind]) then
+        N := Length(FPcm[Kind]) - P;
+      for I := 0 to N - 1 do
+      begin
+        S := Integer(Dest[I]) + Integer(FPcm[Kind][P + I]);
+        if S > 32767 then
+          S := 32767
+        else if S < -32768 then
+          S := -32768;
+        Dest[I] := SmallInt(S);
+      end;
+      FPos[V] := P + N;
+      if FPos[V] >= Length(FPcm[Kind]) then
+        FOn[V] := False; { State change: this cue has left the channel. }
+    end;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TGuideMixer.ActiveVoices: Integer;
+var
+  V: Integer;
+begin
+  Result := 0;
+  FLock.Enter;
+  try
+    for V := 0 to High(FOn) do
+      if FOn[V] then
+        Inc(Result);
+  finally
+    FLock.Leave;
   end;
 end;
 

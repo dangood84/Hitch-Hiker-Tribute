@@ -3,9 +3,10 @@ unit uhostgtk;
 {$mode objfpc}{$H+}
 
 { Linux GTK 2 window. Same TGuideController as macOS; this unit presents
-  a GdkPixbuf on a drawing area, a 50 ms timeout, original WAV stings via
-  paplay/aplay, keys / clicks, and F11 fullscreen. GTK 2 is the Raspberry
-  Pi OS-friendly toolkit the other Pascal apps use. }
+  a GdkPixbuf on a drawing area, a 50 ms timeout, keys / clicks, and
+  F11 fullscreen. Sound is one raw stream opened at launch (uguideplay),
+  kept awake with silence the way NoBugs holds a Panasonic television.
+  GTK 2 is the Raspberry Pi OS-friendly toolkit the other Pascal apps use. }
 
 interface
 
@@ -16,7 +17,7 @@ implementation
 {$IF DEFINED(UNIX) AND NOT DEFINED(DARWIN)}
 
 uses
-  SysUtils, ctypes, gtk2, gdk2, gdk2pixbuf, glib2, Unix, uguidemodel, uguideapp, uguideaudio;
+  SysUtils, ctypes, gtk2, gdk2, gdk2pixbuf, glib2, uguidemodel, uguideapp, uguideaudio, uguideplay;
 
 const
   WinW = 760;
@@ -45,38 +46,6 @@ var
   Pix: PGdkPixbuf;
   FullScreen: Boolean;
   AreaW, AreaH: Integer;
-  SfxWav: array[sfxSearch..sfxType] of TBytes;
-  SfxPath: array[sfxSearch..sfxType] of string;
-
-procedure WriteSfxFiles;
-var
-  Kind: TSfxKind;
-  Path: string;
-  F: File;
-begin
-  for Kind := sfxSearch to sfxType do
-  begin
-    SfxWav[Kind] := BuildSfxWav(Kind);
-    Path := IncludeTrailingPathDelimiter(GetTempDir) + 'hhg-' + SfxName(Kind) + '.wav';
-    SfxPath[Kind] := Path;
-    AssignFile(F, Path);
-    Rewrite(F, 1);
-    if Length(SfxWav[Kind]) > 0 then
-      BlockWrite(F, SfxWav[Kind][0], Length(SfxWav[Kind]));
-    CloseFile(F);
-  end;
-end;
-
-procedure PlaySfx(Kind: TSfxKind);
-var
-  Cmd: string;
-begin
-  if (Kind < sfxSearch) or (Kind > sfxType) then
-    Exit;
-  Cmd := '(paplay ' + SfxPath[Kind] + ' || aplay -q ' + SfxPath[Kind] +
-    ') >/dev/null 2>&1 &';
-  fpSystem(Cmd);
-end;
 
 procedure DrainAudio;
 var
@@ -85,7 +54,7 @@ begin
   if Controller = nil then
     Exit;
   while Controller.Model.DrainSfx(Kind) do
-    PlaySfx(Kind);
+    GuidePlay(Kind);
 end;
 
 procedure DestroyPix;
@@ -411,7 +380,9 @@ var
 begin
   gtk_init(@argc, @argv);
   Controller := TGuideController.Create(WinW, WinH);
-  WriteSfxFiles;
+  { Open the raw stream before the window, so the television is awake
+    by the time the first index row is chosen. }
+  GuidePlayStart;
   FullScreen := False;
   AreaW := WinW;
   AreaH := WinH;
@@ -450,6 +421,7 @@ begin
   Present;
   gtk_widget_show_all(MainWin);
   gtk_main;
+  GuidePlayStop;
   DestroyPix;
   Controller.Free;
 end;
