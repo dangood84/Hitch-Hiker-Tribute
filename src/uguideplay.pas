@@ -24,6 +24,7 @@ uses
 procedure GuidePlayStart;
 procedure GuidePlayStop;
 procedure GuidePlay(Kind: TSfxKind);
+procedure GuidePlayPump; { Linux: one slice from the window timer. Elsewhere a no-op. }
 
 implementation
 
@@ -33,7 +34,7 @@ uses
   , Windows, MMSystem, Classes
   {$ENDIF}
   {$IFDEF LINUX}
-  , Classes, Process, BaseUnix
+  , Process, BaseUnix
   {$ENDIF}
   ;
 
@@ -191,6 +192,10 @@ begin
   FreeAndNil(Mixer);
 end;
 
+procedure GuidePlayPump;
+begin
+end;
+
 {$ENDIF}
 
 {$IFDEF WINDOWS}
@@ -292,34 +297,30 @@ begin
   FreeAndNil(Mixer);
 end;
 
+procedure GuidePlayPump;
+begin
+end;
+
 {$ENDIF}
 
 {$IFDEF LINUX}
 
-const
-  StreamFrames = 512; { ~23 ms. Written at that pace, never in a burst. }
-  F_SETPIPE_SZ = 1031;
-  PipeBytes = 4096; { smallest usual pipe: ~90 ms, a backstop if pace slips }
+{ The player is forked on the window thread and fed from the 50 ms timer.
+  A worker thread that forks pw-play while GTK is already up can leave the
+  child stuck before it reads a sample, and the tube is then silent.
+  The command line is the one NoBugs uses on the Panasonic set. }
 
-type
-  TPipeFeed = class(TThread)
-  private
-    FLowLatency: Boolean;
-    function PlayerExe: string;
-    function OpenPlayer: Boolean;
-    function WriteAll(const Buf; N: Integer): Boolean;
-  protected
-    procedure Execute; override;
-  end;
+const
+  ChunkFrames = 1102; { one CRT tick, 50 ms at GuideSfxRate }
 
 var
-  Feed: TPipeFeed;
   Player: TProcess;
-  PlayerLock: TRTLCriticalSection;
-  LockReady: Boolean;
+  Pending: TBytes;
+  NextFeed: QWord;
+  RetryAt: QWord;
   Reported: Boolean;
 
-function TPipeFeed.PlayerExe: string;
+function PlayerExe: string;
 begin
   if FileExists('/usr/bin/pw-play') then
     Result := '/usr/bin/pw-play'
@@ -333,11 +334,53 @@ begin
     Result := '';
 end;
 
-function TPipeFeed.OpenPlayer: Boolean;
+procedure Unblock(H: THandle);
+var
+  Flags: cint;
+begin
+  Flags := fpfcntl(H, F_GETFL);
+  if Flags >= 0 then
+    fpfcntl(H, F_SETFL, Flags or O_NONBLOCK);
+end;
+
+procedure SpeakPlayer;
+var
+  Buf: array[0..511] of Byte;
+  N, At: Integer;
+  Msg: string;
+begin
+  if (Player = nil) or (Player.Output = nil) then
+    Exit;
+  Msg := '';
+  repeat
+    N := FileRead(Player.Output.Handle, Buf, SizeOf(Buf));
+    if N > 0 then
+    begin
+      At := Length(Msg);
+      SetLength(Msg, At + N);
+      Move(Buf[0], Msg[At + 1], N);
+    end;
+  until N <= 0;
+  if Msg <> '' then
+  begin
+    Writeln(Msg);
+    Flush(Output);
+  end;
+end;
+
+procedure ClosePlayer;
+begin
+  FreeAndNil(Player);
+  Pending := nil;
+end;
+
+function OpenPlayer: Boolean;
 var
   Exe, Name: string;
 begin
   Result := False;
+  if GetTickCount64 < RetryAt then
+    Exit;
   Exe := PlayerExe;
   if Exe = '' then
   begin
@@ -347,206 +390,146 @@ begin
       Flush(Output);
       Reported := True;
     end;
+    RetryAt := GetTickCount64 + 5000;
     Exit;
   end;
-  EnterCriticalSection(PlayerLock);
-  try
-    FreeAndNil(Player);
-    Player := TProcess.Create(nil);
-    Player.Executable := Exe;
-    Name := ExtractFileName(Exe);
-    if (Name = 'pw-play') or (Name = 'pw-cat') then
-    begin
-      if Name = 'pw-cat' then
-        Player.Parameters.Add('--playback');
-      if FLowLatency then
-        Player.Parameters.Add('--latency=40');
-      Player.Parameters.Add('--raw');
-      Player.Parameters.Add('--format=s16');
-      Player.Parameters.Add('--rate=' + IntToStr(GuideSfxRate));
-      Player.Parameters.Add('--channels=1');
-      Player.Parameters.Add('-');
-    end
-    else if Name = 'paplay' then
-    begin
-      if FLowLatency then
-        Player.Parameters.Add('--latency-msec=40');
-      Player.Parameters.Add('--raw');
-      Player.Parameters.Add('--format=s16le');
-      Player.Parameters.Add('--rate=' + IntToStr(GuideSfxRate));
-      Player.Parameters.Add('--channels=1');
-    end
-    else
-    begin
-      Player.Parameters.Add('-q');
-      Player.Parameters.Add('-t');
-      Player.Parameters.Add('raw');
-      Player.Parameters.Add('-f');
-      Player.Parameters.Add('S16_LE');
-      Player.Parameters.Add('-r');
-      Player.Parameters.Add(IntToStr(GuideSfxRate));
-      Player.Parameters.Add('-c');
-      Player.Parameters.Add('1');
-      if FLowLatency then
-      begin
-        Player.Parameters.Add('-B');
-        Player.Parameters.Add('40000');
-        Player.Parameters.Add('-F');
-        Player.Parameters.Add('10000');
-      end;
-    end;
-    Player.Options := [poUsePipes];
-    try
-      Player.Execute;
-    except
-      FreeAndNil(Player);
-      Exit;
-    end;
-    if not Player.Running then
-    begin
-      FreeAndNil(Player);
-      Exit;
-    end;
-    { A deep pipe is how the pips fall behind the letters: the writer
-      fills it, and every new cue waits at the tail. Keep it tiny. }
-    fpfcntl(cint(Player.Input.Handle), F_SETPIPE_SZ, PipeBytes);
-    Result := True;
-  finally
-    LeaveCriticalSection(PlayerLock);
-  end;
-end;
-
-function TPipeFeed.WriteAll(const Buf; N: Integer): Boolean;
-var
-  P: PByte;
-  Left, Got: Integer;
-  H: THandle;
-begin
-  Result := False;
-  P := @Buf;
-  Left := N;
-  while Left > 0 do
+  ClosePlayer;
+  Player := TProcess.Create(nil);
+  Player.Executable := Exe;
+  Name := ExtractFileName(Exe);
+  if (Name = 'pw-play') or (Name = 'pw-cat') then
   begin
-    if Terminated then
-      Exit;
-    EnterCriticalSection(PlayerLock);
-    try
-      if (Player = nil) or not Player.Running then
-        Exit;
-      H := Player.Input.Handle;
-    finally
-      LeaveCriticalSection(PlayerLock);
-    end;
-    Got := FileWrite(H, P^, Left);
-    if Got < 0 then
-    begin
-      if fpgeterrno = ESysEINTR then
-        Continue;
-      Exit;
-    end;
-    if Got = 0 then
-      Exit;
-    Inc(P, Got);
-    Dec(Left, Got);
+    if Name = 'pw-cat' then
+      Player.Parameters.Add('--playback');
+    Player.Parameters.Add('--raw');
+    Player.Parameters.Add('--format=s16');
+    Player.Parameters.Add('--rate=' + IntToStr(GuideSfxRate));
+    Player.Parameters.Add('--channels=1');
+    Player.Parameters.Add('-');
+  end
+  else if Name = 'paplay' then
+  begin
+    Player.Parameters.Add('--raw');
+    Player.Parameters.Add('--format=s16le');
+    Player.Parameters.Add('--rate=' + IntToStr(GuideSfxRate));
+    Player.Parameters.Add('--channels=1');
+  end
+  else
+  begin
+    Player.Parameters.Add('-q');
+    Player.Parameters.Add('-t');
+    Player.Parameters.Add('raw');
+    Player.Parameters.Add('-f');
+    Player.Parameters.Add('S16_LE');
+    Player.Parameters.Add('-r');
+    Player.Parameters.Add(IntToStr(GuideSfxRate));
+    Player.Parameters.Add('-c');
+    Player.Parameters.Add('1');
   end;
+  Player.Options := [poUsePipes, poStderrToOutPut];
+  try
+    Player.Execute;
+  except
+    ClosePlayer;
+    RetryAt := GetTickCount64 + 1000;
+    Exit;
+  end;
+  if Player.Input <> nil then
+    Unblock(Player.Input.Handle);
+  if Player.Output <> nil then
+    Unblock(Player.Output.Handle);
+  if not Player.Running then
+  begin
+    SpeakPlayer;
+    Writeln('audio channel did not stay open');
+    Flush(Output);
+    ClosePlayer;
+    RetryAt := GetTickCount64 + 1000;
+    Exit;
+  end;
+  { State change: raw stream open. Silence from the timer keeps the port awake. }
+  Writeln('audio channel open (', Name, ')');
+  Flush(Output);
+  NextFeed := 0;
   Result := True;
 end;
 
-procedure TPipeFeed.Execute;
+procedure FlushPending;
 var
-  Buf: array[0..StreamFrames - 1] of SmallInt;
-  Next, Now: QWord;
-  ChunkMs: QWord;
+  Got: Integer;
+  Err: cint;
 begin
-  FLowLatency := True;
-  ChunkMs := QWord(StreamFrames) * 1000 div GuideSfxRate;
-  if ChunkMs < 1 then
-    ChunkMs := 1;
-  Next := GetTickCount64;
-  while not Terminated do
+  if (Player = nil) or (Player.Input = nil) or (Length(Pending) = 0) then
+    Exit;
+  Got := FileWrite(Player.Input.Handle, Pending[0], Length(Pending));
+  if Got > 0 then
+    Delete(Pending, 0, Got)
+  else if Got < 0 then
   begin
-    if not OpenPlayer then
+    Err := fpgeterrno;
+    if (Err = ESysEINTR) or (Err = ESysEAGAIN) or (Err = ESysEWOULDBLOCK) then
+      Exit;
+    SpeakPlayer;
+    Writeln('audio channel closed');
+    Flush(Output);
+    ClosePlayer;
+    RetryAt := GetTickCount64 + 1000;
+  end;
+end;
+
+procedure GuidePlayPump;
+var
+  Now: QWord;
+  Frames: array[0..ChunkFrames - 1] of SmallInt;
+  Old: Integer;
+begin
+  if (Player = nil) or not Player.Running then
+  begin
+    if (Player <> nil) and not Player.Running then
     begin
-      FLowLatency := False; { the latency flags may be what the player refused }
-      Sleep(1000);
-      Continue;
+      SpeakPlayer;
+      Writeln('audio channel closed');
+      Flush(Output);
+      ClosePlayer;
+      RetryAt := GetTickCount64 + 1000;
     end;
-    { State change: raw stream open. Silence from here keeps the port awake. }
-    while not Terminated and (Player <> nil) and Player.Running do
+    if not OpenPlayer then
+      Exit;
+  end;
+  SpeakPlayer;
+  Now := GetTickCount64;
+  if Now >= NextFeed then
+  begin
+    { One slice per tick. A second slice would sit in the pipe and the
+      pips would walk away from the letters. }
+    if Length(Pending) < ChunkFrames * 2 then
     begin
       if Mixer <> nil then
-        Mixer.Render(@Buf[0], StreamFrames)
+        Mixer.Render(@Frames[0], ChunkFrames)
       else
-        FillChar(Buf, SizeOf(Buf), 0);
-      if not WriteAll(Buf, SizeOf(Buf)) then
-        Break;
-      { Realtime pace. A late slice is dropped, not poured in afterwards,
-        or the pipe would grow and the pips would walk away from the text. }
-      Next := Next + ChunkMs;
-      Now := GetTickCount64;
-      if (Now + 1000 < Next) or (Now >= Next) then
-        Next := Now
-      else
-        Sleep(LongInt(Next - Now));
+        FillChar(Frames, SizeOf(Frames), 0);
+      Old := Length(Pending);
+      SetLength(Pending, Old + SizeOf(Frames));
+      Move(Frames[0], Pending[Old], SizeOf(Frames));
     end;
-    EnterCriticalSection(PlayerLock);
-    try
-      FreeAndNil(Player);
-    finally
-      LeaveCriticalSection(PlayerLock);
-    end;
-    if not Terminated then
-    begin
-      FLowLatency := False;
-      Sleep(400);
-    end;
+    NextFeed := Now + 50;
   end;
+  FlushPending;
 end;
 
 procedure GuidePlayStart;
 begin
-  if Feed <> nil then
+  if Mixer <> nil then
     Exit;
-  if not LockReady then
-  begin
-    InitCriticalSection(PlayerLock);
-    LockReady := True;
-  end;
   Mixer := TGuideMixer.Create;
-  Feed := TPipeFeed.Create(True);
-  Feed.FreeOnTerminate := False;
-  Feed.Start;
+  NextFeed := 0;
+  RetryAt := 0;
+  OpenPlayer;
 end;
 
 procedure GuidePlayStop;
 begin
-  if Feed <> nil then
-  begin
-    Feed.Terminate;
-    if LockReady then
-    begin
-      EnterCriticalSection(PlayerLock);
-      try
-        if Player <> nil then
-          Player.Terminate(0); { unblocks a write parked in the pipe }
-      finally
-        LeaveCriticalSection(PlayerLock);
-      end;
-    end;
-    Feed.WaitFor;
-    FreeAndNil(Feed);
-  end;
-  if LockReady then
-  begin
-    EnterCriticalSection(PlayerLock);
-    try
-      FreeAndNil(Player);
-    finally
-      LeaveCriticalSection(PlayerLock);
-    end;
-    DoneCriticalSection(PlayerLock);
-    LockReady := False;
-  end;
+  ClosePlayer;
   FreeAndNil(Mixer);
 end;
 
@@ -558,6 +541,10 @@ begin
 end;
 
 procedure GuidePlayStop;
+begin
+end;
+
+procedure GuidePlayPump;
 begin
 end;
 {$ENDIF}

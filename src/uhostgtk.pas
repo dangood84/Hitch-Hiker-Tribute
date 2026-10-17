@@ -55,6 +55,7 @@ begin
     Exit;
   while Controller.Model.DrainSfx(Kind) do
     GuidePlay(Kind);
+  GuidePlayPump; { silence, or the cue just queued, on the same thread as the window }
 end;
 
 procedure DestroyPix;
@@ -378,11 +379,11 @@ var
   Box: PGtkWidget;
   Mask: gint;
 begin
+  { Fork the player before gtk_init. GTK may start its own threads, and a
+    later fork is what left the last build silent. }
+  GuidePlayStart;
   gtk_init(@argc, @argv);
   Controller := TGuideController.Create(WinW, WinH);
-  { Open the raw stream before the window, so the television is awake
-    by the time the first index row is chosen. }
-  GuidePlayStart;
   FullScreen := False;
   AreaW := WinW;
   AreaH := WinH;

@@ -130,7 +130,7 @@ Holds *behaviour*, not pixels:
 
 ### `uguideplay` — one open channel
 
-The stream starts in `GuidePlayStart`, before the first click, and `GuidePlayStop` closes it on quit. Silence keeps flowing the whole time, so the device is already awake when the first index row is chosen. macOS is a three-buffer `AudioQueue` (~36 ms). Windows is four small `waveOut` buffers. Linux is one `pw-play` / `paplay` / `aplay` raw process, paced at real time, with the pipe shrunk so it cannot hold a second of audio.
+The stream starts in `GuidePlayStart`, before the first click, and `GuidePlayStop` closes it on quit. Silence keeps flowing the whole time, so the device is already awake when the first index row is chosen. macOS is a three-buffer `AudioQueue` (~36 ms). Windows is four small `waveOut` buffers. Linux forks one `pw-play` / `paplay` / `aplay` raw process on the window thread, before GTK, and the 50 ms timer writes one slice into it. One slice per tick, so a pip cannot queue up behind a growing backlog.
 
 Hosts drain `Model.DrainSfx` on the timer and after keys/clicks, then `GuidePlay` arms the mixer. They do not open a player per sound.
 
