@@ -31,7 +31,7 @@ implementation
 uses
   SysUtils
   {$IFDEF WINDOWS}
-  , Windows, MMSystem, Classes
+  , Windows, MMSystem
   {$ENDIF}
   {$IFDEF LINUX}
   , Process, BaseUnix
@@ -44,8 +44,8 @@ uses
 
 var
   Mixer: TGuideMixer;
-  {$IFNDEF LINUX}
-  ChannelOpen: Boolean; { read on macOS and Windows; the Linux feed just runs }
+  {$IFDEF DARWIN}
+  ChannelOpen: Boolean;
   {$ENDIF}
 
 procedure GuidePlay(Kind: TSfxKind);
@@ -200,105 +200,236 @@ end;
 
 {$IFDEF WINDOWS}
 
-const
-  StreamFrames = 256;
-  StreamBuffers = 4;
+{ PlaySound reopens the device for every pip. On the Boot Camp Cirrus
+  stack that is the squeak, and a background refill thread makes the pip
+  land on a different clock from the letter. One waveOut stays open.
+  The window timer queues one whole slice per letter, pip at the front. }
 
-type
-  TWaveFeed = class(TThread)
-  protected
-    procedure Execute; override;
-  end;
+const
+  ChunkFrames = 1102; { one CRT tick, 50 ms at GuideSfxRate }
+  WaveSlots = 3;
 
 var
-  Feed: TWaveFeed;
   Wave: HWAVEOUT;
+  PlayRate: Integer;
+  PlayChannels: Integer;
+  Hdr: array[0..WaveSlots - 1] of TWaveHdr;
+  WavePcm: array[0..WaveSlots - 1] of TBytes;
+  Pending: TBytes;
+  NextFeed: QWord;
+  RetryAt: QWord;
+  OpenReported: Boolean;
 
-procedure TWaveFeed.Execute;
+function TryWave(Device: UINT; Rate, Channels: Integer): Boolean;
 var
   Fmt: TWaveFormatEx;
-  Hdr: array[0..StreamBuffers - 1] of TWaveHdr;
-  Samples: array[0..StreamBuffers - 1, 0..StreamFrames - 1] of SmallInt;
-  I, Sent: Integer;
 begin
   FillChar(Fmt, SizeOf(Fmt), 0);
   Fmt.wFormatTag := WAVE_FORMAT_PCM;
-  Fmt.nChannels := 1;
-  Fmt.nSamplesPerSec := GuideSfxRate;
+  Fmt.nChannels := Channels;
+  Fmt.nSamplesPerSec := Rate;
   Fmt.wBitsPerSample := 16;
-  Fmt.nBlockAlign := 2;
-  Fmt.nAvgBytesPerSec := GuideSfxRate * 2;
+  Fmt.nBlockAlign := Channels * 2;
+  Fmt.nAvgBytesPerSec := DWORD(Rate) * DWORD(Fmt.nBlockAlign);
   Fmt.cbSize := 0;
-  Wave := 0;
-  if waveOutOpen(@Wave, WAVE_MAPPER, @Fmt, 0, 0, CALLBACK_NULL) <> 0 then
+  Result := waveOutOpen(@Wave, Device, @Fmt, 0, 0, CALLBACK_NULL) = MMSYSERR_NOERROR;
+  if not Result then
+    Wave := 0;
+end;
+
+function OpenWave: Boolean;
+const
+  { 22050 mono is the mixer. The Cirrus driver often refuses it. }
+  TryRate: array[0..4] of Integer = (22050, 44100, 44100, 48000, 48000);
+  TryCh: array[0..4] of Integer = (1, 2, 1, 2, 1);
+var
+  I, D, N: Integer;
+  Dev: UINT;
+begin
+  Result := Wave <> 0;
+  if Result then
+    Exit;
+  if GetTickCount64 < RetryAt then
+    Exit;
+  N := Integer(waveOutGetNumDevs);
+  for D := -1 to N - 1 do
   begin
+    if D < 0 then
+      Dev := WAVE_MAPPER
+    else
+      Dev := UINT(D);
+    for I := 0 to High(TryRate) do
+      if TryWave(Dev, TryRate[I], TryCh[I]) then
+      begin
+        PlayRate := TryRate[I];
+        PlayChannels := TryCh[I];
+        { State change: device asleep → one waveOut, held for the whole run. }
+        Writeln('audio channel open (', PlayRate, ' Hz, ', PlayChannels, ' ch)');
+        Flush(Output);
+        NextFeed := 0;
+        Exit(True);
+      end;
+  end;
+  if not OpenReported then
+  begin
+    OpenReported := True;
     Writeln('audio channel did not open');
     Flush(Output);
+  end;
+  RetryAt := GetTickCount64 + 1000;
+end;
+
+procedure ReleaseDone;
+var
+  I: Integer;
+begin
+  if Wave = 0 then
+    Exit;
+  for I := 0 to High(Hdr) do
+    if ((Hdr[I].dwFlags and WHDR_PREPARED) <> 0) and
+       ((Hdr[I].dwFlags and WHDR_INQUEUE) = 0) then
+    begin
+      waveOutUnprepareHeader(Wave, @Hdr[I], SizeOf(TWaveHdr));
+      FillChar(Hdr[I], SizeOf(Hdr[I]), 0);
+    end;
+end;
+
+function FreeSlot: Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  for I := 0 to High(Hdr) do
+    if (Hdr[I].dwFlags and WHDR_PREPARED) = 0 then
+      Exit(I);
+end;
+
+function Submit(const Pcm: TBytes): Boolean;
+var
+  Slot: Integer;
+begin
+  Result := False;
+  if Length(Pcm) < 2 then
+    Exit;
+  ReleaseDone;
+  Slot := FreeSlot;
+  if Slot < 0 then
+    Exit;
+  WavePcm[Slot] := Pcm;
+  FillChar(Hdr[Slot], SizeOf(TWaveHdr), 0);
+  Hdr[Slot].lpData := PChar(@WavePcm[Slot][0]);
+  Hdr[Slot].dwBufferLength := Length(WavePcm[Slot]);
+  if waveOutPrepareHeader(Wave, @Hdr[Slot], SizeOf(TWaveHdr)) <> MMSYSERR_NOERROR then
+    Exit;
+  if waveOutWrite(Wave, @Hdr[Slot], SizeOf(TWaveHdr)) <> MMSYSERR_NOERROR then
+  begin
+    waveOutUnprepareHeader(Wave, @Hdr[Slot], SizeOf(TWaveHdr));
+    FillChar(Hdr[Slot], SizeOf(TWaveHdr), 0);
     Exit;
   end;
-  FillChar(Hdr, SizeOf(Hdr), 0);
-  for I := 0 to StreamBuffers - 1 do
+  Result := True;
+end;
+
+function FitSlice(const Frames: array of SmallInt): TBytes;
+var
+  SrcN, DstN, I, Ch, Idx, S0, S1, Sample, At: Integer;
+  Pos: Int64;
+begin
+  Result := nil;
+  SrcN := Length(Frames);
+  if (SrcN < 1) or (PlayRate < 1) or (PlayChannels < 1) then
+    Exit;
+  if (PlayRate = GuideSfxRate) and (PlayChannels = 1) then
   begin
-    if Mixer <> nil then
-      Mixer.Render(@Samples[I, 0], StreamFrames)
+    SetLength(Result, SrcN * 2);
+    Move(Frames[0], Result[0], SrcN * 2);
+    Exit;
+  end;
+  DstN := Integer((Int64(SrcN) * PlayRate + (GuideSfxRate div 2)) div GuideSfxRate);
+  if DstN < 1 then
+    DstN := 1;
+  SetLength(Result, DstN * PlayChannels * 2);
+  for I := 0 to DstN - 1 do
+  begin
+    Pos := Int64(I) * GuideSfxRate;
+    Idx := Integer(Pos div PlayRate);
+    if Idx >= SrcN - 1 then
+      Sample := Frames[SrcN - 1]
     else
-      FillChar(Samples[I], SizeOf(Samples[I]), 0);
-    Hdr[I].lpData := PChar(@Samples[I, 0]);
-    Hdr[I].dwBufferLength := StreamFrames * 2;
-    waveOutPrepareHeader(Wave, @Hdr[I], SizeOf(TWaveHdr));
-    waveOutWrite(Wave, @Hdr[I], SizeOf(TWaveHdr));
+    begin
+      S0 := Frames[Idx];
+      S1 := Frames[Idx + 1];
+      Sample := S0 + Integer((Int64(S1 - S0) * (Pos mod PlayRate)) div PlayRate);
+    end;
+    if Sample > 32767 then
+      Sample := 32767;
+    if Sample < -32768 then
+      Sample := -32768;
+    for Ch := 0 to PlayChannels - 1 do
+    begin
+      At := (I * PlayChannels + Ch) * 2;
+      Result[At] := Byte(Word(Sample) and $FF);
+      Result[At + 1] := Byte((Word(Sample) shr 8) and $FF);
+    end;
   end;
-  { State change: wave device held open. Four short buffers, no fifth. }
-  ChannelOpen := True;
-  while not Terminated do
+end;
+
+procedure GuidePlayPump;
+var
+  Now: QWord;
+  Frames: array[0..ChunkFrames - 1] of SmallInt;
+  Pcm: TBytes;
+begin
+  if not OpenWave then
+    Exit;
+  ReleaseDone;
+  if Length(Pending) > 0 then
   begin
-    Sent := 0;
-    for I := 0 to StreamBuffers - 1 do
-      if (Hdr[I].dwFlags and WHDR_DONE) <> 0 then
-      begin
-        if Mixer <> nil then
-          Mixer.Render(@Samples[I, 0], StreamFrames)
-        else
-          FillChar(Samples[I], SizeOf(Samples[I]), 0);
-        Hdr[I].dwBufferLength := StreamFrames * 2;
-        waveOutWrite(Wave, @Hdr[I], SizeOf(TWaveHdr));
-        Inc(Sent);
-      end;
-    if Sent = 0 then
-      Sleep(2);
+    if not Submit(Pending) then
+      Exit; { still queued behind; do not render a second slice }
+    Pending := nil;
   end;
-  ChannelOpen := False;
-  waveOutReset(Wave);
-  for I := 0 to StreamBuffers - 1 do
-    waveOutUnprepareHeader(Wave, @Hdr[I], SizeOf(TWaveHdr));
-  waveOutClose(Wave);
-  Wave := 0;
+  Now := GetTickCount64;
+  if Now < NextFeed then
+    Exit;
+  if Mixer <> nil then
+    Mixer.Render(@Frames[0], ChunkFrames)
+  else
+    FillChar(Frames, SizeOf(Frames), 0);
+  Pcm := FitSlice(Frames);
+  if not Submit(Pcm) then
+    Pending := Pcm; { one slice waiting; a second would walk away from the letters }
+  NextFeed := Now + 50;
 end;
 
 procedure GuidePlayStart;
 begin
-  if ChannelOpen or (Feed <> nil) then
+  if Mixer <> nil then
     Exit;
   Mixer := TGuideMixer.Create;
-  Feed := TWaveFeed.Create(True);
-  Feed.FreeOnTerminate := False;
-  Feed.Start;
+  PlayRate := GuideSfxRate;
+  PlayChannels := 1;
+  NextFeed := 0;
+  RetryAt := 0;
+  OpenWave;
 end;
 
 procedure GuidePlayStop;
+var
+  I: Integer;
 begin
-  if Feed <> nil then
+  if Wave <> 0 then
   begin
-    Feed.Terminate;
-    Feed.WaitFor;
-    FreeAndNil(Feed);
+    waveOutReset(Wave);
+    for I := 0 to High(Hdr) do
+      if (Hdr[I].dwFlags and WHDR_PREPARED) <> 0 then
+        waveOutUnprepareHeader(Wave, @Hdr[I], SizeOf(TWaveHdr));
+    waveOutClose(Wave);
+    Wave := 0;
   end;
-  ChannelOpen := False;
+  FillChar(Hdr, SizeOf(Hdr), 0);
+  Pending := nil;
   FreeAndNil(Mixer);
-end;
-
-procedure GuidePlayPump;
-begin
 end;
 
 {$ENDIF}

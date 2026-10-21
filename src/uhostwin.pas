@@ -5,7 +5,7 @@ unit uhostwin;
 { Windows titled, resizable window on the taskbar. Same TGuideController
   as macOS; this unit presents pixels (BGRA StretchDIBits), a 50 ms
   timer, keys / clicks, and F11 / double-click fullscreen. Sound is one
-  waveOut stream opened at launch (uguideplay), not a PlaySound per pip. }
+  waveOut held open for the run; each letter queues its own slice. }
 
 interface
 
@@ -72,6 +72,7 @@ begin
     Exit;
   while Controller.Model.DrainSfx(Kind) do
     GuidePlay(Kind);
+  GuidePlayPump; { the pip is the front of this tick's slice }
 end;
 
 function ClientToCanvas(Wnd: HWND; X, Y: Integer; out CX, CY: Double): Boolean;

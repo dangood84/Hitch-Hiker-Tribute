@@ -89,7 +89,7 @@ All three cues are **original square-wave WAVs** built in memory at launch (`ugu
 
 One playback stream opens when the tube does, and stays open, full of silence, until quit. The first index chirp is not what has to wake the speaker — that wake already happened while Earth was sitting on the screen. Each later pip is mixed into the next short slice of that same stream, so the blips cannot queue up behind the letters.
 
-macOS uses a short `AudioQueue`. Windows uses `waveOut` with a handful of small buffers. Linux writes raw samples into one `pw-play` (or `paplay`, or `aplay`) process and paces that write in real time, with the pipe kept small. The tube still runs if the player is missing; it is just quiet.
+macOS uses a short `AudioQueue`. Windows keeps one `waveOut` open and queues one slice per letter on the same timer as the glyph. Linux writes raw samples into one `pw-play` (or `paplay`, or `aplay`) process, one slice per tick. The tube still runs if the player is missing; it is just quiet.
 
 ## Keyboard
 
