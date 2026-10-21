@@ -124,13 +124,13 @@ Holds *behaviour*, not pixels:
 
 ### `uguideaudio` — original bytes
 
-`BuildSfxWav` writes in-memory WAVs (22050 Hz, 16-bit mono). Search is a stuttering rising/falling square-wave chirp. Found is a short G5–D6 beep. Type is a short F6 pip, one per letter. Original tribute tones, not the BBC TV soundtrack.
+`BuildSfxWav` writes in-memory WAVs (22050 Hz, 16-bit mono). Search is a stuttering rising/falling square-wave chirp that runs the length of RESEARCHING and fades into the found beep, a short G5–D6 gong. Type is a short F6 pip, one per letter. Original tribute tones, not the BBC TV soundtrack.
 
 `TGuideMixer` turns those WAVs into PCM and mixes whatever is playing into the next block of samples a host asks for. A cue starts at the front of that block. It is not appended behind a buffer of earlier silence, which is how a pip used to arrive after its letter.
 
 ### `uguideplay` — one open channel
 
-The stream starts in `GuidePlayStart`, before the first click, and `GuidePlayStop` closes it on quit. Silence keeps flowing the whole time, so the device is already awake when the first index row is chosen. macOS is a three-buffer `AudioQueue` (~36 ms). Windows keeps one `waveOut` open — reopening it per pip is what squeaks on the Boot Camp Cirrus device — and the 50 ms timer queues one slice per letter, with the pip at the front of that slice. Linux forks one `pw-play` / `paplay` / `aplay` raw process on the window thread, before GTK, and the 50 ms timer writes one slice into it. One slice per tick, so a pip cannot queue up behind a growing backlog.
+The stream starts in `GuidePlayStart`, before the first click, and `GuidePlayStop` closes it on quit. Silence keeps flowing the whole time, so the device is already awake when the first index row is chosen. macOS is a three-buffer `AudioQueue` (~36 ms). Windows keeps one `waveOut` open — reopening it per pip is what squeaks on the Boot Camp Cirrus device — and the 50 ms timer queues one slice per letter, with the pip at the front of that slice. The timer is asked for a 1 ms period so a continuous chirp does not open a hole between those slices. Linux forks one `pw-play` / `paplay` / `aplay` raw process on the window thread, before GTK, and the 50 ms timer writes one slice into it. One slice per tick, so a pip cannot queue up behind a growing backlog.
 
 Hosts drain `Model.DrainSfx` on the timer and after keys/clicks, then `GuidePlay` arms the mixer. They do not open a player per sound.
 

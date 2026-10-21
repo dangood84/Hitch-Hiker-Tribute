@@ -100,31 +100,43 @@ begin
 end;
 
 function BuildSearchWav: TBytes;
+const
+  Dur = 0.93; { research is ~0.9 s; the tail hands the note to the gong }
 var
   Samples, I: Integer;
-  T, Hz, Env, Gate, Acc, Phase: Double;
+  T, Hz, Env, Gate, Gap, Open, Acc, Phase: Double;
 begin
-  { ~0.48 s — sits under RESEARCHING. A rising then falling scan with
-    a 18 Hz stutter, the 1981 computer-hunting-the-page chirp. }
-  Samples := Round(Rate * 0.48);
+  { Rising then falling scan with an 18 Hz stutter while the page is
+    hunted. The stutter closes out over the last phrase, and that phrase
+    fades into the found-beep instead of stopping dead and leaving a hole. }
+  Samples := Round(Rate * Dur);
   Result := nil;
   WriteWavHeader(Result, Samples);
   Phase := 0;
   for I := 0 to Samples - 1 do
   begin
     T := I / Rate;
-    if T < 0.32 then
-      Hz := 520 + T * 2800
+    if T < 0.50 then
+      Hz := 520 + T * 2160
     else
-      Hz := 1400 - (T - 0.32) * 900;
-    Gate := 1;
+      Hz := 1600 - (T - 0.50) * 1400;
+    Gap := 0;
     if Frac(T * 18) > 0.55 then
-      Gate := 0;
+      Gap := 1;
+    if T < 0.74 then
+      Gate := 1 - Gap
+    else if T < 0.82 then
+    begin
+      Open := (T - 0.74) / 0.08;
+      Gate := 1 - Gap * (1 - Open);
+    end
+    else
+      Gate := 1;
     Env := 0.52 * Gate;
     if T < 0.02 then
       Env := Env * (T / 0.02);
-    if T > 0.40 then
-      Env := Env * Max(0, (0.48 - T) / 0.08);
+    if T > 0.84 then
+      Env := Env * Max(0, (Dur - T) / 0.09);
     Phase := Frac(Phase + Hz / Rate);
     Acc := Square(Phase, 0.28) * Env + Noise(I) * Env * 0.12;
     PutSample(Result, I, Acc);

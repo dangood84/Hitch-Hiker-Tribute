@@ -24,7 +24,7 @@ uses
 procedure GuidePlayStart;
 procedure GuidePlayStop;
 procedure GuidePlay(Kind: TSfxKind);
-procedure GuidePlayPump; { Linux: one slice from the window timer. Elsewhere a no-op. }
+procedure GuidePlayPump; { Windows and Linux: one slice from the window timer. }
 
 implementation
 
@@ -219,6 +219,7 @@ var
   NextFeed: QWord;
   RetryAt: QWord;
   OpenReported: Boolean;
+  TimerPeriod: Boolean;
 
 function TryWave(Device: UINT; Rate, Channels: Integer): Boolean;
 var
@@ -411,6 +412,9 @@ begin
   PlayChannels := 1;
   NextFeed := 0;
   RetryAt := 0;
+  { Default scheduling is ~15 ms. A 50 ms slice then finishes before the
+    next tick, and the trill opens a hole just before the gong. }
+  TimerPeriod := timeBeginPeriod(1) = 0;
   OpenWave;
 end;
 
@@ -429,6 +433,11 @@ begin
   end;
   FillChar(Hdr, SizeOf(Hdr), 0);
   Pending := nil;
+  if TimerPeriod then
+  begin
+    timeEndPeriod(1);
+    TimerPeriod := False;
+  end;
   FreeAndNil(Mixer);
 end;
 
