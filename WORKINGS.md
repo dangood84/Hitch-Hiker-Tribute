@@ -124,7 +124,7 @@ Holds *behaviour*, not pixels:
 
 ### `uguideaudio` — original bytes
 
-`BuildSfxWav` writes in-memory WAVs (22050 Hz, 16-bit mono). Search is a stuttering rising/falling square-wave chirp that runs the length of RESEARCHING and fades into the found beep, a short G5–D6 gong. Type is a short F6 pip, one per letter. Original tribute tones, not the BBC TV soundtrack.
+`BuildSfxWav` writes in-memory WAVs (22050 Hz, 16-bit mono). Search is a stuttering square-wave chirp that rises for the whole of RESEARCHING. The found beep, a short G5–D6 gong, cuts that rise and is the landing. Type is a short F6 pip, one per letter. Original tribute tones, not the BBC TV soundtrack.
 
 `TGuideMixer` turns those WAVs into PCM and mixes whatever is playing into the next block of samples a host asks for. A cue starts at the front of that block. It is not appended behind a buffer of earlier silence, which is how a pip used to arrive after its letter.
 
@@ -138,7 +138,7 @@ Hosts drain `Model.DrainSfx` on the timer and after keys/clicks, then `GuidePlay
 
 Each host:
 
-1. Opens the playback stream (`GuidePlayStart`) so the speaker is awake before the first click
+1. On macOS, clears Pascal's floating-point traps on the main thread and on every thread as it starts (`ufpcalm`), then opens the playback stream (`GuidePlayStart`) so the speaker is awake before the first click
 2. Creates the controller at the native pixel size (retina-scaled on macOS)
 3. Builds a titled window, About / Quit, View → Full Screen
 4. Starts a 50 ms timer

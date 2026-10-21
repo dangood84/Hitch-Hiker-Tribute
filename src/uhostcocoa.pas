@@ -532,6 +532,10 @@ var
   Pool: NSAutoreleasePool;
   App: NSApplication;
 begin
+  { Metal's sampler math uses NaNs. Left unmasked, those traps become an
+    access violation and the tube exits on the first frame. }
+  SetExceptionMask([exInvalidOp, exDenormalized, exZeroDivide,
+    exOverflow, exUnderflow, exPrecision]);
   Pool := NSAutoreleasePool.alloc.init;
   App := NSApplication.sharedApplication;
   App.setActivationPolicy(NSApplicationActivationPolicyRegular); { Dock icon }

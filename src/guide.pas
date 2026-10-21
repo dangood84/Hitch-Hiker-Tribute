@@ -20,6 +20,7 @@ uses
   cthreads, { first, or Linux refuses the playback thread at startup }
   {$ENDIF}
   {$IFDEF DARWIN}
+  ufpcalm, { before Cocoa, or Metal inherits Pascal's float traps }
   uhostcocoa
   {$ELSE}
     {$IFDEF WINDOWS}

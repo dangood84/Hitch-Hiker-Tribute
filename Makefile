@@ -18,8 +18,11 @@ all: app
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/HitchHikersGuide: $(BUILD) $(SRC)/*.pas
-	$(FPC) $(FLAGS) $(UNITS) -o$(BUILD)/HitchHikersGuide $(SRC)/guide.pas
+$(BUILD)/fpcalm.o: $(SRC)/fpcalm.c
+	clang -c -O2 -mmacos-version-min=11.0 -o $@ $<
+
+$(BUILD)/HitchHikersGuide: $(BUILD) $(SRC)/*.pas $(BUILD)/fpcalm.o
+	$(FPC) $(FLAGS) -Fl$(BUILD) $(UNITS) -o$(BUILD)/HitchHikersGuide $(SRC)/guide.pas
 
 $(BUILD)/guidetest: $(BUILD) $(SRC)/uguidemodel.pas $(SRC)/uguideaudio.pas $(SRC)/guidetest.pas
 	$(FPC) $(FLAGS) $(UNITS) -o$(BUILD)/guidetest $(SRC)/guidetest.pas

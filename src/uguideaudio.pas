@@ -28,6 +28,7 @@ type
     FKind: array[0..7] of TSfxKind;
     FPos: array[0..7] of Integer;
     FOn: array[0..7] of Boolean;
+    FRelease: array[0..7] of Integer; { -1 sustains; else samples left in the fade }
     procedure LoadKind(Kind: TSfxKind);
   public
     constructor Create;
@@ -101,14 +102,14 @@ end;
 
 function BuildSearchWav: TBytes;
 const
-  Dur = 0.93; { research is ~0.9 s; the tail hands the note to the gong }
+  Dur = 1.50; { longer than RESEARCHING; the found beep cuts it }
 var
   Samples, I: Integer;
-  T, Hz, Env, Gate, Gap, Open, Acc, Phase: Double;
+  T, Hz, Env, Gate, Acc, Phase: Double;
 begin
-  { Rising then falling scan with an 18 Hz stutter while the page is
-    hunted. The stutter closes out over the last phrase, and that phrase
-    fades into the found-beep instead of stopping dead and leaving a hole. }
+  { Rising 18 Hz stutter for the whole hunt. Pitch keeps climbing.
+    The found beep is the landing: the mixer fades this voice into it,
+    instead of the sweep turning around and stopping short. }
   Samples := Round(Rate * Dur);
   Result := nil;
   WriteWavHeader(Result, Samples);
@@ -116,27 +117,13 @@ begin
   for I := 0 to Samples - 1 do
   begin
     T := I / Rate;
-    if T < 0.50 then
-      Hz := 520 + T * 2160
-    else
-      Hz := 1600 - (T - 0.50) * 1400;
-    Gap := 0;
+    Hz := 480 + T * 900; { still rising when the gong arrives, up near D6 }
+    Gate := 1;
     if Frac(T * 18) > 0.55 then
-      Gap := 1;
-    if T < 0.74 then
-      Gate := 1 - Gap
-    else if T < 0.82 then
-    begin
-      Open := (T - 0.74) / 0.08;
-      Gate := 1 - Gap * (1 - Open);
-    end
-    else
-      Gate := 1;
+      Gate := 0;
     Env := 0.52 * Gate;
     if T < 0.02 then
       Env := Env * (T / 0.02);
-    if T > 0.84 then
-      Env := Env * Max(0, (Dur - T) / 0.09);
     Phase := Frac(Phase + Hz / Rate);
     Acc := Square(Phase, 0.28) * Env + Noise(I) * Env * 0.12;
     PutSample(Result, I, Acc);
@@ -258,7 +245,10 @@ begin
   for Kind := sfxSearch to sfxType do
     LoadKind(Kind);
   for V := 0 to High(FOn) do
+  begin
     FOn[V] := False;
+    FRelease[V] := -1;
+  end;
 end;
 
 destructor TGuideMixer.Destroy;
@@ -289,11 +279,16 @@ begin
         Oldest := V;
     if Slot < 0 then
       Slot := Oldest; { every voice busy: the one furthest along yields }
+    if Kind = sfxFound then
+      for V := 0 to High(FOn) do
+        if FOn[V] and (FKind[V] = sfxSearch) and (FRelease[V] < 0) then
+          FRelease[V] := Round(Rate * 0.05); { State change: hunt yields to the gong. }
     { State change: this cue starts at the next rendered slice.
       It is mixed into the open channel, not parked behind it. }
     FKind[Slot] := Kind;
     FPos[Slot] := 0;
     FOn[Slot] := True;
+    FRelease[Slot] := -1;
   finally
     FLock.Leave;
   end;
@@ -322,7 +317,18 @@ begin
         N := Length(FPcm[Kind]) - P;
       for I := 0 to N - 1 do
       begin
-        S := Integer(Dest[I]) + Integer(FPcm[Kind][P + I]);
+        if FRelease[V] = 0 then
+        begin
+          N := I; { fade finished inside this slice }
+          Break;
+        end;
+        S := FPcm[Kind][P + I];
+        if FRelease[V] > 0 then
+        begin
+          S := S * FRelease[V] div Round(Rate * 0.05);
+          Dec(FRelease[V]);
+        end;
+        S := Integer(Dest[I]) + S;
         if S > 32767 then
           S := 32767
         else if S < -32768 then
@@ -330,7 +336,7 @@ begin
         Dest[I] := SmallInt(S);
       end;
       FPos[V] := P + N;
-      if FPos[V] >= Length(FPcm[Kind]) then
+      if (FRelease[V] = 0) or (FPos[V] >= Length(FPcm[Kind])) then
         FOn[V] := False; { State change: this cue has left the channel. }
     end;
   finally

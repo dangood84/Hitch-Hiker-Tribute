@@ -123,6 +123,8 @@ src/
   uguideplay.pas     # one open stream: AudioQueue / waveOut / pw-play
   ubitmapfont.pas    # 8×8 glyphs (no native text APIs)
   uhostcocoa.pas     # macOS NSWindow
+  ufpcalm.pas        # macOS: clear Pascal float traps before Cocoa
+  fpcalm.c           # macOS: same clear, on each new thread and on a trap
   uhostwin.pas       # Windows HWND
   uhostgtk.pas       # Linux GtkWindow
   guidetest.pas      # headless encyclopedia / phase / sfx checks
